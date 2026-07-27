@@ -76,6 +76,7 @@
 1. 下载 DDU (Display Driver Uninstaller)
 2. 安全模式下彻底清除现有 AMD 驱动
 3. 安装 **Radeon-ID Sophronia 25.3.1** 社区驱动
+   - 下载地址：[SourceForge - WHQL-R-ID-Software-Hybrid-25.3.1-R2.5](https://sourceforge.net/projects/radeon-id-distribution/files/Release%20Polaris-Vega-Navi/WHQL-R-ID-Software-Hybrid-25.3.1-R2.5-Win10-Win11-PolarisVegaNavi-Sophronia.7z/download)
    - 选择 Enterprise/PRO/Compute 组件
 4. 从 AMD 官网下载并安装 **HIP SDK 5.7.1**
    - 安装包文件名：`AMD-Software-PRO-Edition-23.Q4-Win10-Win11-For-HIP.exe`
@@ -96,49 +97,60 @@ pip install therock-tools
 therock install --device-gfx900
 ```
 
-### 3. 应用源码补丁 / Apply Source Patches
+### 3. 一键编译 / One-Click Build
+
+本仓库已包含 CrispASR 源码（`crispasr/` 目录，补丁已应用）和 ggml 源码，无需额外克隆。
 
 ```powershell
-# 克隆 CrispASR 源码
-git clone https://github.com/crisp-asr/crispasr.git
-cd crispasr
+# 克隆本仓库
+git clone https://github.com/A-XIANGQAQ/crispasr-vega-rocm.git
+cd crispasr-vega-rocm
 
-# 应用 Windows 兼容性补丁
-git apply /path/to/crispasr-vega-rocm/patches/01-cmake-fixes.patch
-git apply /path/to/crispasr-vega-rocm/patches/02-crispasr-windows-fixes.patch
-git apply /path/to/crispasr-vega-rocm/patches/03-diagnostics-windows-fixes.patch
-git apply /path/to/crispasr-vega-rocm/patches/04-diff-main-windows-fixes.patch
-git apply /path/to/crispasr-vega-rocm/patches/05-cli-cmake-fixes.patch
+# 一键编译（自动镜像到无空格路径 → 编译 CrispASR → 编译 Shim DLL → 部署 DLL）
+powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1
 ```
 
-### 4. 编译 / Build
+> **注意**：`build-all.ps1` 会自动处理 hipcc 不支持空格路径的问题（镜像到 `C:\cabuild\crispasr`）、code object v4 兼容性、`-j 2` 并行度等所有已知坑点。
+
+<details>
+<summary>手动分步编译（高级） / Manual Build (Advanced)</summary>
 
 ```powershell
-# 注意：hipcc 不支持路径含空格，需将源码镜像到无空格路径
-robocopy "<你的源码路径>" "<无空格的构建路径>" /MIR
+# 1. 镜像源码到无空格路径
+robocopy crispasr C:\cabuild\crispasr /MIR /XD .git /XF *.gguf *.wav
 
-# 编译
-cd <无空格的构建路径>
-# 复制本项目的 scripts\build-hip-therock.ps1 到源码根目录
-powershell -ExecutionPolicy Bypass -File build-hip-therock.ps1
-```
+# 2. 编译 CrispASR
+cd C:\cabuild\crispasr
+powershell -ExecutionPolicy Bypass -File ..\..\scripts\build-hip-therock.ps1 -SourceDir C:\cabuild\crispasr
 
-### 5. 编译 Shim DLL / Build Shim DLL
-
-```powershell
-# 在 VS 2022 Developer Command Prompt 中执行
+# 3. 编译 Shim DLL（在 VS 2022 Developer Command Prompt 中）
 cl /O2 /GS- /c hip-shim\hip_shim.c
 link /DLL /OUT:amdhip64_7.dll hip_shim.obj /DEF:hip-shim\hip_shim.def /NODEFAULTLIB kernel32.lib
 ```
+</details>
 
-### 6. 运行 / Run
+### 4. 运行 / Run
 
 ```batch
 set HSA_OVERRIDE_GFX_VERSION=9.0.0
 set HSA_ENABLE_SDMA=0
 set HIP_VISIBLE_DEVICES=0
-bin-hip\crispasr.exe -m model.gguf -f audio.wav
+
+:: ASR - 自动下载模型 (-m auto)
+bin-hip\crispasr.exe -m auto -f audio.wav
+
+:: 指定后端
+bin-hip\crispasr.exe --backend sensevoice -m auto -f audio.wav
+
+:: TTS - 语音合成
+bin-hip\crispasr.exe --backend kokoro -m auto --tts "Hello world" --tts-output out.wav
+bin-hip\crispasr.exe --backend qwen3 -m auto --tts "你好世界" --tts-output out.wav
+
+:: 诊断
+bin-hip\crispasr.exe --diagnostics
 ```
+
+> `-m auto` 会自动从 HuggingFace 下载所需模型到 `~/.cache/crispasr/`，无需手动下载。
 
 ### 环境变量说明 / Environment Variables
 
@@ -154,14 +166,15 @@ bin-hip\crispasr.exe -m model.gguf -f audio.wav
 
 | 脚本 | 平台 | 用途 | 验证状态 |
 |------|------|------|----------|
-| `scripts/build-hip-therock.ps1` | Windows | 用 TheRock SDK 编译（推荐） | **已验证** |
+| `scripts/build-all.ps1` | Windows | **一键编译**（推荐）：镜像→编译→Shim DLL→部署 DLL | **已验证** |
+| `scripts/build-hip-therock.ps1` | Windows | 仅编译 CrispASR（需手动处理镜像和 DLL） | **已验证** |
 | `scripts/run_crispasr_hip.bat` | Windows | 运行 crispasr，自动设环境变量 | **已验证** |
 | `scripts/build-hip.bat` | Windows | 用官方 HIP SDK 编译（备选） | 未验证 |
 | `scripts/build-hip-linux.sh` | Linux/WSL2 | Linux 下编译 | 编译通过，运行未验证（Vega WSL2 无 GPU 直通） |
 | `scripts/run_crispasr_hip-linux.sh` | Linux/WSL2 | Linux 下运行 | 未验证 |
 | `scripts/run_crispasr_vulkan.bat` | Windows | Vulkan 后端运行（备选） | 未验证（CrispASR 官方称 Vulkan 在 AMD 上会出错） |
 
-> **注意**：实际只需 `scripts/build-hip-therock.ps1` + `scripts/run_crispasr_hip.bat` 两个脚本即可在 Windows 上完成编译和运行。其他脚本为备选方案，供不同环境参考。
+> **注意**：实际只需 `scripts/build-all.ps1` + `scripts/run_crispasr_hip.bat` 两个脚本即可在 Windows 上完成编译和运行。其他脚本为备选方案，供不同环境参考。
 
 ---
 
@@ -344,18 +357,40 @@ crispasr-vega-rocm/
 │   ├── hip_shim.c             # ROCm 7.x → 5.7 结构体翻译 / Struct translation
 │   └── hip_shim.def           # 60+ 符号转发定义 / 60+ symbol forwards
 ├── scripts/                   # 构建和运行脚本 / Build and run scripts
-│   ├── build-hip-therock.ps1  # TheRock SDK 编译脚本 (已验证) / TheRock build (verified)
+│   ├── build-all.ps1          # 一键编译 (已验证) / One-click build (verified)
+│   ├── build-hip-therock.ps1  # 仅编译 CrispASR (已验证) / Build only (verified)
 │   ├── run_crispasr_hip.bat   # Windows 运行脚本 (已验证) / Windows run (verified)
-│   ├── build-hip.bat          # 通用 HIP 编译脚本 (未验证) / Generic HIP build (unverified)
-│   ├── build-hip-linux.sh     # Linux/WSL2 编译脚本 (未验证) / Linux build (unverified)
-│   ├── run_crispasr_hip-linux.sh # Linux 运行脚本 (未验证) / Linux run (unverified)
-│   └── run_crispasr_vulkan.bat   # Vulkan 后端运行 (未验证) / Vulkan backend (unverified)
-└── patches/                   # CrispASR 源码补丁 / Source patches
-    ├── 01-cmake-fixes.patch   # CMakeLists.txt Windows 兼容性修复
-    ├── 02-crispasr-windows-fixes.patch # crispasr.cpp Windows 兼容性修复
-    ├── 03-diagnostics-windows-fixes.patch # 诊断工具 Windows 修复
-    ├── 04-diff-main-windows-fixes.patch # diff_main POSIX→Windows 函数替换
-    └── 05-cli-cmake-fixes.patch # CLI CMakeLists 修复
+│   ├── build-hip.bat          # 通用 HIP 编译 (未验证) / Generic HIP build (unverified)
+│   ├── build-hip-linux.sh     # Linux/WSL2 编译 (未验证) / Linux build (unverified)
+│   ├── run_crispasr_hip-linux.sh # Linux 运行 (未验证) / Linux run (unverified)
+│   └── run_crispasr_vulkan.bat   # Vulkan 后端 (未验证) / Vulkan backend (unverified)
+├── crispasr/                  # CrispASR 源码 (补丁已应用) / Source (pre-patched)
+│   ├── CMakeLists.txt         # 根 CMake (含 Windows 兼容性修复)
+│   ├── src/                   # 核心源码 (43 ASR + 48 TTS 后端)
+│   ├── ggml/                  # ggml 源码 (含 HIP 后端, code object v4)
+│   ├── examples/              # CLI 源码
+│   ├── include/               # 头文件
+│   ├── cmake/                 # CMake 模块
+│   ├── crisp_audio/           # 音频处理
+│   ├── crisp_lid/             # 语言识别
+│   ├── crisp_punc/            # 标点恢复
+│   ├── crisp_truecase/        # 大小写归一化
+│   ├── third_party/           # OpenCL 头文件 + c2pa-audio
+│   ├── models/                # 模型配置 (模型文件运行时自动下载)
+│   ├── samples/               # 测试音频
+│   ├── tools/                 # 工具
+│   └── VERSION
+├── patches/                   # 源码补丁 (已应用, 供参考) / Patches (applied, for reference)
+│   ├── 01-cmake-fixes.patch
+│   ├── 02-crispasr-windows-fixes.patch
+│   ├── 03-diagnostics-windows-fixes.patch
+│   ├── 04-diff-main-windows-fixes.patch
+│   └── 05-cli-cmake-fixes.patch
+└── bin-hip/                   # 编译输出 (gitignore, 需自行编译) / Build output
+    ├── crispasr.exe           # 主程序
+    ├── ggml-hip.dll           # HIP 后端 (code object v4)
+    ├── amdhip64_7.dll         # ABI Shim (7.x → 5.7)
+    └── ...                    # ROCm 运行时 DLL
 ```
 
 ---

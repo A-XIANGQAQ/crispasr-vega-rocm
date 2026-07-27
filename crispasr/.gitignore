@@ -1,0 +1,53 @@
+# ============================================================
+# CrispASR Vega ROCm/HIP - .gitignore
+# ============================================================
+
+# === Build directories ===
+build-*/
+build/
+
+# === Build outputs / binary directories ===
+bin-hip/*.dll
+bin-hip/*.exe
+bin-hip/rocblas/
+bin-hip/*.wav
+bin-hip/amd_comgr_old.dll
+bin-hip/amdhip64_7_shim.dll
+bin-hip/_therock_dlls/
+bin-opencl/
+bin-rocm57/
+
+# === Models ===
+*.gguf
+models/
+
+# === Driver packages (not needed in git) ===
+../HIP-SDK/
+../GHOST/
+../Radeon-ID Sophronia 25.3.1/
+../therock/
+../zluda/
+
+# === IDE / OS ===
+.vs/
+.vscode/
+*.user
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# === Python ===
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# === CMake ===
+CMakeUserPresets.json
+compile_commands.json
+
+# === Temp ===
+*.tmp
+*.bak
+*.log
+*.zip
