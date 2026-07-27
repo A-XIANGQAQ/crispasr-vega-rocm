@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 756cdf16..868b06d0 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -285,7 +285,7 @@ set_target_properties(crispasr-lib PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOUR
+ install(TARGETS crispasr-lib LIBRARY PUBLIC_HEADER)
+ 
+ target_compile_definitions(crispasr-lib PRIVATE
+-    CRISPASR_VERSION="${PROJECT_VERSION}"
++    CRISPASR_VERSION=${PROJECT_VERSION}
+ )
+ 
+ configure_package_config_file(

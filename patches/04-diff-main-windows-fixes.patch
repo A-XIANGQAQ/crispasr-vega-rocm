@@ -1,0 +1,26 @@
+diff --git a/examples/cli/crispasr_diff_main.cpp b/examples/cli/crispasr_diff_main.cpp
+index 3369ac93..9eed0831 100644
+--- a/examples/cli/crispasr_diff_main.cpp
++++ b/examples/cli/crispasr_diff_main.cpp
+@@ -33,6 +33,21 @@
+ 
+ #include <cmath>
+ 
++// Windows compatibility: POSIX setenv/unsetenv are not available on MSVC.
++// Map them to _putenv_s so the diff harness compiles on Windows HIP builds.
++#ifdef _WIN32
++static inline int setenv(const char* name, const char* value, int overwrite) {
++    if (!overwrite) {
++        char* existing = getenv(name);
++        if (existing && *existing) return 0;
++    }
++    return _putenv_s(name, value ? value : "");
++}
++static inline int unsetenv(const char* name) {
++    return _putenv_s(name, "");
++}
++#endif
++
+ #include "crispasr_diff.h"
+ 
+ #include "voxtral.h"

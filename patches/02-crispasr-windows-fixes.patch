@@ -1,0 +1,19 @@
+diff --git a/src/crispasr.cpp b/src/crispasr.cpp
+index 6b540f93..a7c755a2 100644
+--- a/src/crispasr.cpp
++++ b/src/crispasr.cpp
+@@ -9589,8 +9589,13 @@ void whisper_log_set(ggml_log_callback log_callback, void* user_data) {
+     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
+ }
+ 
++// Stringification macros — works even when hipcc.bat strips quotes
++// from -D definitions. Converts bare macro value to string literal.
++#define CRISPASR_STR_HELPER(x) #x
++#define CRISPASR_STR(x) CRISPASR_STR_HELPER(x)
++
+ const char* whisper_version(void) {
+-    return CRISPASR_VERSION;
++    return CRISPASR_STR(CRISPASR_VERSION);
+ }
+ 
+ GGML_ATTRIBUTE_FORMAT(2, 3)

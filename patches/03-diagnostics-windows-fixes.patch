@@ -1,0 +1,35 @@
+diff --git a/examples/cli/crispasr_diagnostics.cpp b/examples/cli/crispasr_diagnostics.cpp
+index 16181a92..61268603 100644
+--- a/examples/cli/crispasr_diagnostics.cpp
++++ b/examples/cli/crispasr_diagnostics.cpp
+@@ -14,6 +14,30 @@
+ // strings so that when the project is built outside the standard CMake flow
+ // (eg. someone copying cli.cpp into another tree) the binary still links.
+ 
++// Workaround for hipcc.bat stripping quotes from -D definitions.
++// CMakeLists.txt defines _RAW versions without quotes; re-stringify here.
++#define CRISPASR_STR_HELPER(x) #x
++#define CRISPASR_STR(x) CRISPASR_STR_HELPER(x)
++
++#ifdef CRISPASR_VERSION_STR_RAW
++#define CRISPASR_VERSION_STR CRISPASR_STR(CRISPASR_VERSION_STR_RAW)
++#endif
++#ifdef CRISPASR_GIT_SHA1_RAW
++#define CRISPASR_GIT_SHA1 CRISPASR_STR(CRISPASR_GIT_SHA1_RAW)
++#endif
++#ifdef CRISPASR_GIT_DATE_RAW
++#define CRISPASR_GIT_DATE CRISPASR_STR(CRISPASR_GIT_DATE_RAW)
++#endif
++#ifdef CRISPASR_GIT_SUBJECT_RAW
++#define CRISPASR_GIT_SUBJECT CRISPASR_STR(CRISPASR_GIT_SUBJECT_RAW)
++#endif
++#ifdef CRISPASR_BUILD_DATE_RAW
++#define CRISPASR_BUILD_DATE CRISPASR_STR(CRISPASR_BUILD_DATE_RAW)
++#endif
++#ifdef CRISPASR_BUILD_TYPE_RAW
++#define CRISPASR_BUILD_TYPE CRISPASR_STR(CRISPASR_BUILD_TYPE_RAW)
++#endif
++
+ #ifndef CRISPASR_VERSION_STR
+ #define CRISPASR_VERSION_STR "unknown"
+ #endif

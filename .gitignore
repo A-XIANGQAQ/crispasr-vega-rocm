@@ -1,0 +1,24 @@
+# Build artifacts
+build-hip*/
+bin-hip/
+*.exe
+*.dll
+*.obj
+*.lib
+*.exp
+*.wav
+*.gguf
+*.bin
+
+# TheRock SDK
+therock/
+
+# IDE
+.vscode/
+.idea/
+*.user
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
