@@ -53,12 +53,35 @@
 
 ## 性能实测 / Performance Benchmarks
 
-| 任务 | 模型 | 耗时 | 速度 |
-|------|------|------|------|
-| ASR 语音识别 | SenseVoice Small Q8 | 0.38s / 11s 音频 | **28.8x 实时** |
-| TTS 语音合成 | Kokoro 82M Q8 | 即时 | CPU 回退 (内置 workaround) |
-| TTS 语音合成 | Qwen3-TTS 0.6B Q8 | 9.9s / 6.4s 音频 | RTF 1.54x |
-| TTS 中文合成 | Qwen3-TTS 0.6B Q8 | 13.7s / 8.9s 音频 | RTF 1.54x |
+> 测试日期：2026-07-28 | CrispASR v0.8.14 | Vega 56/64 (gfx900, 8GB VRAM) | ROCm 5.7 + TheRock HIP (clang 23.0.0)
+
+### ASR 语音识别 (GPU 加速)
+
+| 模型 | 量化 | 大小 | 语言 | 音频时长 | 处理时间 | 实时率 | 状态 |
+|------|------|------|------|---------|---------|--------|------|
+| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.47s | **23.6x** | GPU 已验证 |
+| SenseVoice Small | Q4_K | 129MB | ZH | 13.1s | 0.47s | **27.7x** | GPU 已验证 |
+| Qwen3-ASR 0.6B | Q4_K | 602MB | EN | 11.0s | 2.66s | 4.1x | GPU 已验证 |
+| Qwen3-ASR 0.6B | Q4_K | 602MB | ZH | 13.1s | 3.19s | 4.1x | GPU 已验证 |
+| Qwen3-ASR 1.7B | Q4_K | 1422MB | EN | 11.0s | 3.62s | 3.0x | GPU 已验证 |
+| Qwen3-ASR 1.7B | Q4_K | 1422MB | ZH | 13.1s | 4.28s | 3.0x | GPU 已验证 |
+
+### TTS 语音合成
+
+| 模型 | 量化 | 大小 | 运行模式 | 输出时长 | 总耗时 | RTF | 状态 |
+|------|------|------|---------|---------|--------|-----|------|
+| Kokoro 82M | Q8_0 | 135MB | CPU (Metal-hang workaround) | 3.65s | 6.3s | ~1.7x | 已验证 |
+| Qwen3-TTS 0.6B | Q8_0 | 940MB | GPU+CPU 混合 | 4.32s | 13.4s | 1.45x | 已验证 |
+| Chatterbox | Q8_0 | 958MB | 全 CPU (-ng) | 3.76s | 14.9s | ~0.25x | 仅 CPU 可用 |
+| F5-TTS | F16 | 953MB | GPU | — | — | — | 不可用 (FlashAttention 崩溃) |
+| F5-TTS | F16 | 953MB | CPU | — | >120s | — | 不可用 (CPU 推理超时) |
+
+### Vega GPU 兼容性说明
+
+- **ASR 全系列可用**：SenseVoice / Qwen3-ASR 0.6B / 1.7B 均在 Vega GPU 上完美运行
+- **F5-TTS 不兼容**：Vega GPU 的 FlashAttention 内核崩溃 (`fattn.cu:602`)，即使 `-nfa` 也无效；CPU 推理 32 步 ODE 超过 2 分钟无输出
+- **Chatterbox 仅 CPU**：GPU 模式 S3Gen UNet 崩溃 (`Module not initialized`)，S3Gen CPU 回退也失败 (buffer 断言错误)，只有全 CPU 模式 (`-ng`) 可工作
+- **Qwen3-TTS 混合模式**：Talker 在 CPU 运行，Codec 在 GPU 运行，FlashAttention 不支持时自动回退到调度器路径
 
 ---
 
@@ -340,8 +363,11 @@ ABI 桥接成功后，GPU 检测正常，但 TTS 运行报 "shared object initia
 ggml_cuda_init: found 1 ROCm devices (Total VRAM: 8176 MiB):
   Device 0: Radeon RX Vega, gfx900:xnack- (0x900), VMM: no, Wave Size: 64, VRAM: 8176 MiB
 
-ASR: 11.0s audio in 0.38s (28.8x realtime)
-TTS: Qwen3-TTS 0.6B, RTF 1.54x on Vega 56
+ASR: SenseVoice Small  23.6-27.7x realtime (GPU)
+ASR: Qwen3-ASR 0.6B    4.1x realtime (GPU)
+ASR: Qwen3-ASR 1.7B    3.0x realtime (GPU)
+TTS: Kokoro 82M        ~1.7x RTF (CPU)
+TTS: Qwen3-TTS 0.6B    1.45x RTF (GPU+CPU)
 ```
 
 ---
