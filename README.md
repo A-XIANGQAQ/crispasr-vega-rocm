@@ -105,11 +105,11 @@
    - 安装包文件名：`AMD-Software-PRO-Edition-23.Q4-Win10-Win11-For-HIP.exe`
    - 下载页面：https://www.amd.com/en/developer/resources/rocm-hub/hip-sdk.html
    - 安装后目录为 `C:\Program Files\AMD\ROCm\5.7`（路径只含主次版本号，不显示补丁号 .1，属正常现象）
-5. 替换 gfx900 专用的 rocBLAS 库
+5. （可选）替换 gfx900 专用的 rocBLAS 库
    - 下载 `rocm.gfx800-gfx900-for.hip.sdk.5.7.1-and-6.2.4.7z`
    - 来源：[advanced-lvl-up/Rx470-Vega10-Rx580-gfx803-gfx900-fix-AMD-GPU](https://github.com/advanced-lvl-up/Rx470-Vega10-Rx580-gfx803-gfx900-fix-AMD-GPU/releases/tag/v1.0.0)
-   - 解压后将 `rocblas.dll` 替换到 `C:\Program Files\AMD\ROCm\5.7\bin\`
-   - 将 `rocblas\library` 文件夹替换到 `C:\Program Files\AMD\ROCm\5.7\bin\rocblas\library`
+   - 解压后将 `rocblas.dll` 替换到 `C:\Program Files\AMD\ROCm\5.7\bin\`，将 `rocblas\library` 文件夹替换到 `C:\Program Files\AMD\ROCm\5.7\bin\rocblas\library`
+   - **2026-08-05 起改为可选**：实测 gfx900 上所有 rocBLAS GEMM 路径（Sgemm/GemmEx）均返回 `CUBLAS_STATUS_INTERNAL_ERROR`，本仓库已在 `ggml-cuda.cu` 内置自定义 `vega_*` GEMM 内核绕开 rocBLAS，不替换库也能正常跑（首次编译时该库有效，可保留作为性能优化尝试）
 
 ### 2. 安装 TheRock ROCm SDK
 
@@ -134,6 +134,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1
 ```
 
 > **注意**：`build-all.ps1` 会自动处理 hipcc 不支持空格路径的问题（镜像到 `C:\cabuild\crispasr`）、code object v4 兼容性、`-j 2` 并行度等所有已知坑点。
+> 第二次编译（2026-08-05）新增的坑点也已固化进脚本：直接用 TheRock clang 23 编译（生成 `hipcc-wrap.bat`，绕开 hipcc.pl 的 Perl 依赖和 clang 17 与 MSVC STL 的不兼容）、`CMAKE_SHARED_LINKER_FLAGS` 注入 clang builtins 库（修复 `__truncsfhf2` 链接错误）、自动清理残留的 `.ninja_lock`。
 
 <details>
 <summary>手动分步编译（高级） / Manual Build (Advanced)</summary>

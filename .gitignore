@@ -1,14 +1,30 @@
 # Build artifacts
-build-hip*/
+build-*/
 bin-hip/
+bin-rocm*/
 *.exe
 *.dll
 *.obj
 *.lib
 *.exp
+*.pdb
 *.wav
 *.gguf
 *.bin
+
+# Redundant copies / scratch dirs at repo root (single source of truth is crispasr/)
+/ggml/
+/bindings/
+/samples/
+/third_party/
+/exports_raw.txt
+
+# hip-shim debug leftovers (keep hip_shim.c / hip_shim.def only)
+hip-shim/amdhip64_generated.def
+hip-shim/exports_raw.txt
+hip-shim/test_*.c
+hip-shim/*.exp
+hip-shim/*.obj
 
 # TheRock SDK
 therock/
