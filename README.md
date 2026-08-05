@@ -234,6 +234,21 @@ Kokoro 模型在 CrispASR 中有内置的 "Metal-hang workaround"，强制 `gen=
 | clang 前端崩溃 | 编译中途内存不足退出 | 降到 `-j 2` 并行度 |
 | Vega 模型加载挂起 | 加载模型时卡死 | 设置 `HSA_ENABLE_SDMA=0` |
 
+### 第二次编译新增坑（2026-08-05，杀毒误杀后重建）
+
+| 坑 | 现象 | 解决方案 |
+|----|------|----------|
+| 杀毒误杀编译产物 | DLL 被当木马删除，运行报 DLL not found | 恢复文件后全量重建（第二次编译的起因） |
+| `.def` forwarder 被 link.exe 静默忽略 | `STATUS_ENTRYPOINT_NOT_FOUND`，hipGetDeviceProperties 找不到 | 改用 `#pragma comment(linker, "/export:xxx=amdhip64.xxx")` 显式转发（MSVC 14.51 不再支持 .def 转发语法） |
+| Shim 结构体翻译导致架构 ID 错乱 | `invalid architecture ID received for device 0: cc 1024.1024` | `hipGetDeviceProperties` 直接转发到 ROCm 5.7，不再翻译结构体（ggml-hip.dll 按 5.7 头编译） |
+| `hipMemGetInfo` 在 Vega 上失效 | ROCm 5.7 对 Vega 返回 `invalid argument` | Shim 先试真函数，失败后从 `hipGetDeviceProperties` 的 totalGlobalMem 回退 |
+| SHARED 库缺 clang builtins | `lld-link: undefined symbol: __truncsfhf2` | `CMAKE_SHARED_LINKER_FLAGS` 手动指向 `clang_rt.builtins-x86_64.lib`（EXE 有 CMake 自动检测，SHARED 没有） |
+| ninja 锁文件残留 | `ninja: error: WriteFile(.ninja_lock): Permission denied` | 删除 `build-*/\.ninja_lock` 后重试 |
+| 手工改 CMakeCache 不生效 | 链接标志改了但没起作用 | 改完必须重新跑 `cmake -S . -B build -G Ninja` |
+| **rocBLAS 在 gfx900 上 GEMM 全挂** | `CUBLAS_STATUS_INTERNAL_ERROR`：Sgemm / GemmEx(F16→F32) / GemmEx(F16→F16) 全部失败 | 换 dispatcher、TheRock 21MB 库（ABI 不兼容）、完整 145MB 库（缺依赖）均无效 → **在 ggml-cuda.cu 中写自定义 GEMM 内核绕开 rocBLAS** |
+| MMF 内核不能当通用 GEMM 用 | 强制 `ggml_cuda_mul_mat_f` 后 `mmf.cuh:746: GGML_ASSERT(ids \|\| ncols_dst <= 16)` | MMF 只支持 `ncols ≤ 16`，编码器 384 列直接断言；必须自研内核 |
+| PowerShell PATH 带空格被解析 | `d:\Program: The term ... not recognized` | 命令执行环境 PATH 含空格路径，须用完整路径调用 cmake / ninja |
+
 ---
 
 ## 适用显卡 / Supported GPUs
@@ -356,6 +371,61 @@ ABI 桥接成功后，GPU 检测正常，但 TTS 运行报 "shared object initia
 5. 最终 54 个编译步骤全部成功，`ggml-hip.dll` 重新生成
 
 同时恢复了 ROCm 5.7 版本的 `amd_comgr.dll` (100.5MB)，替换 TheRock 的新版本 (121MB)。
+
+### 阶段十：第二次编译 — 杀毒误杀重建 + rocBLAS 失效 (2026-08-05)
+
+> 与第一次对照：第一次踩的是"从零把 ROCm 跑通"的坑；第二次踩的是"环境被毁后重建"的坑，其中 **rocBLAS GEMM 在 gfx900 上全线失效** 是全新的、也是最硬的一个。
+
+**起因**：杀毒软件把编译产物（DLL）当木马删除，恢复后需要全量重建。
+
+**复现的坑（与第一次同源，但症状升级）**：
+
+1. **clang builtins 链接错误换个马甲复现** — 第一次是 EXE 链接报 `__cpu_model`，这次是 **ggml-hip.dll（SHARED 库）** 链接报 `undefined symbol: __truncsfhf2`。原因：CLI 的 CMake 有 clang builtins 自动检测，但 `ggml-hip.dll` 是共享库，需要手动把 `clang_rt.builtins-x86_64.lib` 写进 `CMAKE_SHARED_LINKER_FLAGS`。改完 CMakeCache 后还必须重新跑 `cmake -S . -B build -G Ninja` 才生效。
+2. **Shim 转发失效** — 第一次用 `.def` 文件的 forwarder 语法（`hipFoo=amdhip64.hipFoo`），但 MSVC 14.51 的 link.exe **静默忽略**这个语法，表现为 `STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139)`。修复：改用 `#pragma comment(linker, "/export:hipFoo=amdhip64.hipFoo")` 显式声明。
+3. **Shim 结构体翻译翻车** — 第一次靠 shim 把 5.7 的 `hipDeviceProp_t` 翻译成 7.x 布局；但 ggml-hip.dll 实际按 5.7 头编译，翻译结果导致 `cc 1024.1024`（invalid architecture ID）。修复：`hipGetDeviceProperties` 直接转发到 5.7，不做翻译。
+4. **`hipMemGetInfo` 在 Vega 上失效** — ROCm 5.7 对 Vega Windows 返回 `invalid argument`。Shim 实现：先调真函数，失败后从 `hipGetDeviceProperties` 的 `totalGlobalMem` 回退。
+5. **ninja 锁文件残留** — `ninja: error: WriteFile(.ninja_lock): Permission denied`，删掉 `.ninja_lock` 即可。
+
+**全新的大坑：rocBLAS 在 gfx900 上 GEMM 全线失败**
+
+GPU 检测正常、模型加载正常，但一旦进入矩阵乘法就报 `CUBLAS_STATUS_INTERNAL_ERROR`。系统排查：
+
+| 尝试 | 结果 |
+|------|------|
+| `hipblasSgemm`（F32） | `CUBLAS_STATUS_INTERNAL_ERROR` |
+| `hipblasGemmEx`（F16→F32 累积） | `CUBLAS_STATUS_INTERNAL_ERROR` |
+| `hipblasGemmEx`（F16→F16 累积） | `CUBLAS_STATUS_INTERNAL_ERROR` |
+| 82KB dispatcher + `rocblas_gfx900.dll`（145MB，gfx900 专用） | 同样失败 |
+| TheRock 21MB `rocblas.dll` | `STATUS_ENTRYPOINT_NOT_FOUND`（ABI 不兼容） |
+| 完整 145MB `rocblas.dll`（ROCm 5.7 原版） | `STATUS_DLL_NOT_FOUND`（缺依赖） |
+
+`ROCBLAS_LAYER=1` 日志确认 dispatcher 转发正常、`rocblas_sgemm(T,N,3000,384,240,...)` 确实被调用，但 rocBLAS 内部返回 internal error——**TensileLibrary 加载 OK，实际计算层是坏的**。
+
+期间还试过绕过 cuBLAS 直接调 MMF 内核（`ggml_cuda_mul_mat_f`），编译通过但运行报 `mmf.cuh:746: GGML_ASSERT(ids || ncols_dst <= 16)`——MMF 只支持 `ncols ≤ 16`（mul_mat_id 场景除外），whisper 编码器矩阵 384 列直接断言，MMF 不能当通用 GEMM 用。
+
+**最终解决方案：自定义 GEMM 内核绕开 rocBLAS**（`crispasr/ggml/src/ggml-cuda/ggml-cuda.cu`）
+
+- `vega_tiled_sgemm_kernel` — 32×32 tile + 共享内存的 F32 GEMM，每线程算 2×2 元素
+- `vega_naive_hgemm_kernel` — F16 输入 → F32 输出的 GEMM
+- 分发包装 `vega_sgemm()` / `vega_hgemm()`
+- 在 `ggml_cuda_op_mul_mat_cublas` 内对 `cc == GGML_CUDA_CC_VEGA` 短路，三个 cuBLAS 调用点全部替换为自定义内核
+- `use_fp16` 条件对 Vega 放行（原 CrispASR 补丁强制 src1==F32 走 F32 路径，Vega 允许走 F16 路径以命中自定义内核）
+
+**验证结果**（2026-08-05，whisper tiny + jfk.wav，ROCm 0 后端）：
+
+```
+ggml_cuda_init: found 1 ROCm devices (Total VRAM: 8176 MiB):
+  Device 0: Radeon RX Vega, gfx900:xnack- (0x900), VMM: no, Wave Size: 64, VRAM: 8176 MiB
+
+[00:00:00.000 --> 00:00:10.500]   And so my fellow Americans ask not what your country
+can do for you, ask what you can do for your country.
+
+whisper_print_timings:   encode time =   468.79 ms /     2 runs (   234.39 ms per run)
+whisper_print_timings:   decode time =   105.12 ms /    27 runs (     3.89 ms per run)
+whisper_print_timings:    total time =  2681.93 ms
+```
+
+转录结果正确，GPU 计算正常。自定义内核是正确性优先的朴素实现，性能不如原生 rocBLAS（tile 内核 32×32 无流水线），后续可用 warp-level tiling / vectorized loads 优化。
 
 ### 最终结果 / Final Result
 

@@ -126,7 +126,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     // More relevant for the cuBLAS path. See https://github.com/ggml-org/llama.cpp/issues/19659
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        if (__isnanf(wt[i])) {
+        if (isnan(wt[i])) { // [patched for ROCm 5.7] HIP headers lack __isnanf; isnan works on both stacks
             wt[i] = -FLT_MAX;
         }
     }

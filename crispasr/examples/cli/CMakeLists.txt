@@ -367,8 +367,43 @@ target_link_libraries(${TARGET} PRIVATE
     $<$<BOOL:${WIN32}>:bcrypt>
     $<$<BOOL:${WIN32}>:iphlpapi>
     $<$<BOOL:${WIN32}>:shell32>
+    # Media Foundation libs — crispasr_audio.cpp uses #pragma comment(lib, ...)
+    # for these, which MSVC honors but Clang/hipcc (TheRock ROCm SDK) ignores.
+    # Without explicit linkage, HIP builds fail with unresolved IMFSourceReader
+    # / MFCreateSourceReaderFromMediaSource symbols.
+    $<$<BOOL:${WIN32}>:mfplat>
+    $<$<BOOL:${WIN32}>:mfreadwrite>
+    $<$<BOOL:${WIN32}>:mfuuid>
+    $<$<BOOL:${WIN32}>:ole32>
     $<$<BOOL:${CRISPASR_CURL}>:CURL::libcurl>
 )
+
+# ---------------------------------------------------------------------------
+# Clang builtins library — when building with hipcc/Clang (TheRock ROCm SDK,
+# MinGW-Clang, etc.), the __cpu_model symbol is undefined because Clang's
+# runtime builtins library is not auto-linked like MSVC's. This causes a
+# linker error referencing __cpu_model from glint.lib and other static libs.
+# Auto-detect the library path from the compiler and link it explicitly.
+# MSVC does not need this (it provides __cpu_model in its own runtime).
+# ---------------------------------------------------------------------------
+if(WIN32 AND NOT MSVC)
+    execute_process(
+        COMMAND ${CMAKE_CXX_COMPILER} --print-file-name=clang_rt.builtins-x86_64.lib
+        OUTPUT_VARIABLE _clang_builtins_lib
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _clang_builtins_result
+    )
+    if(_clang_builtins_result EQUAL 0 AND _clang_builtins_lib AND EXISTS "${_clang_builtins_lib}")
+        target_link_libraries(${TARGET} PRIVATE "${_clang_builtins_lib}")
+        message(STATUS "Clang builtins (auto-detected): ${_clang_builtins_lib}")
+    else()
+        message(WARNING "Could not auto-detect clang_rt.builtins library. "
+                        "If the link fails with undefined __cpu_model, manually "
+                        "set CMAKE_EXE_LINKER_FLAGS to include the path to "
+                        "clang_rt.builtins-x86_64.lib")
+    endif()
+endif()
 
 if (CRISPASR_CURL)
     target_compile_definitions(${TARGET} PRIVATE CRISPASR_USE_LIBCURL)

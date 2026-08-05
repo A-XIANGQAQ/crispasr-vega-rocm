@@ -252,6 +252,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/x86/repack.cpp
             )
 
+        # [patched] clang 17 (ROCm 5.7) hits 'Instruction Combining seems stuck' on arch/x86/repack.cpp;
+        # this clang fork has no instcombine-max-iterations knob, so clamp the TU to -O0 (-O1/-O2/-mno-avx512f all loop; verified compiles clean at -O0).
+        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            set_source_files_properties(ggml-cpu/arch/x86/repack.cpp
+                PROPERTIES COMPILE_OPTIONS "-O0")
+        endif()
+
         if (MSVC)
             # instruction set detection for MSVC only
             if (GGML_NATIVE)

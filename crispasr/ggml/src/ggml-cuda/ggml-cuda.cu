@@ -1505,6 +1505,122 @@ static const cublas_force_compute_type & ggml_cuda_cublas_get_force_compute_type
     return compute_type;
 }
 
+
+// Naive F32 GEMM kernel for Vega (gfx900) where rocBLAS is broken.
+// Computes C = alpha * A^T * B + beta * C (column-major).
+// A: [K, M] col-major (lda=K), op(A)=A^T is [M, K]
+// B: [K, N] col-major (ldb=K)
+// C: [M, N] col-major (ldc=M)
+__global__ void vega_naive_sgemm_kernel(
+    const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C,
+    int M, int N, int K, int lda, int ldb, int ldc,
+    float alpha, float beta)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N) {
+        float sum = 0.0f;
+        for (int k = 0; k < K; ++k) {
+            sum += A[k + i * lda] * B[k + j * ldb];
+        }
+        int idx = i + j * ldc;
+        C[idx] = alpha * sum + beta * C[idx];
+    }
+}
+
+// Naive F16 GEMM kernel for Vega (gfx900).
+// Same layout as above but with F16 inputs and F32 output.
+__global__ void vega_naive_hgemm_kernel(
+    const half* __restrict__ A, const half* __restrict__ B, float* __restrict__ C,
+    int M, int N, int K, int lda, int ldb, int ldc,
+    float alpha, float beta)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N) {
+        float sum = 0.0f;
+        for (int k = 0; k < K; ++k) {
+            sum += __half2float(A[k + i * lda]) * __half2float(B[k + j * ldb]);
+        }
+        int idx = i + j * ldc;
+        C[idx] = alpha * sum + beta * C[idx];
+    }
+}
+
+// Tiled F32 GEMM kernel for better performance on Vega.
+// Uses 32x32 tiles with 16x16 threads, each thread computes 2x2 elements.
+__global__ void vega_tiled_sgemm_kernel(
+    const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C,
+    int M, int N, int K, int lda, int ldb, int ldc,
+    float alpha, float beta)
+{
+    const int TILE = 32;
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+
+    int bx = blockIdx.x, by = blockIdx.y;
+    int tx = threadIdx.x, ty = threadIdx.y;
+
+    int row = bx * TILE + tx;
+    int col = by * TILE + ty;
+
+    float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
+    int row1 = row + TILE/2;
+    int col1 = col + TILE/2;
+
+    for (int t = 0; t < (K + TILE - 1) / TILE; ++t) {
+        // Load A^T: A[k, i] = A[k + i * lda]
+        As[tx][ty] = (t * TILE + ty < K && row < M) ? A[(t * TILE + ty) + row * lda] : 0.0f;
+        As[tx + TILE/2][ty] = (t * TILE + ty < K && row1 < M) ? A[(t * TILE + ty) + row1 * lda] : 0.0f;
+
+        // Load B: B[k, j] = B[k + j * ldb]
+        Bs[ty][tx] = (t * TILE + tx < K && col < N) ? B[(t * TILE + tx) + col * ldb] : 0.0f;
+        Bs[ty + TILE/2][tx] = (t * TILE + tx < K && col1 < N) ? B[(t * TILE + tx) + col1 * ldb] : 0.0f;
+
+        __syncthreads();
+
+        for (int k = 0; k < TILE; ++k) {
+            float a0 = As[k][tx];
+            float a1 = As[k][tx + TILE/2];
+            float b0 = Bs[k][ty];
+            float b1 = Bs[k][ty + TILE/2];
+            sum0 += a0 * b0;
+            sum1 += a0 * b1;
+            sum2 += a1 * b0;
+            sum3 += a1 * b1;
+        }
+        __syncthreads();
+    }
+
+    if (row < M && col < N)         C[row + col * ldc]         = alpha * sum0 + beta * C[row + col * ldc];
+    if (row < M && col1 < N)        C[row + col1 * ldc]        = alpha * sum1 + beta * C[row + col1 * ldc];
+    if (row1 < M && col < N)        C[row1 + col * ldc]        = alpha * sum2 + beta * C[row1 + col * ldc];
+    if (row1 < M && col1 < N)       C[row1 + col1 * ldc]       = alpha * sum3 + beta * C[row1 + col1 * ldc];
+}
+
+// Dispatch wrapper: calls the tiled kernel for F32 GEMM
+static void vega_sgemm(const float* A, const float* B, float* C,
+    int M, int N, int K, int lda, int ldb, int ldc,
+    float alpha, float beta, cudaStream_t stream)
+{
+    const int TILE = 32;
+    dim3 block(TILE/2, TILE/2);
+    dim3 grid((M + TILE - 1) / TILE, (N + TILE - 1) / TILE);
+    vega_tiled_sgemm_kernel<<<grid, block, 0, stream>>>(
+        A, B, C, M, N, K, lda, ldb, ldc, alpha, beta);
+}
+
+// Dispatch wrapper: calls the naive kernel for F16 GEMM
+static void vega_hgemm(const half* A, const half* B, float* C,
+    int M, int N, int K, int lda, int ldb, int ldc,
+    float alpha, float beta, cudaStream_t stream)
+{
+    dim3 block(16, 16);
+    dim3 grid((M + 15) / 16, (N + 15) / 16);
+    vega_naive_hgemm_kernel<<<grid, block, 0, stream>>>(
+        A, B, C, M, N, K, lda, ldb, ldc, alpha, beta);
+}
+
 static void ggml_cuda_op_mul_mat_cublas(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
@@ -1561,7 +1677,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         // Fix: when src1 is F32, always fall through to the F32 cublasSgemm
         // path (dequant weight to F32, keep activation F32). This is slightly
         // slower but numerically correct.
-        !(src1->type == GGML_TYPE_F32);
+        !(src1->type == GGML_TYPE_F32) || cc == GGML_CUDA_CC_VEGA;
 
     if (supports_bf16 && src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
@@ -1617,7 +1733,12 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         const auto & force_compute_type = ggml_cuda_cublas_get_force_compute_type();
 
-        if (!force_compute_type.fp16 && (GGML_CUDA_CC_IS_CDNA(cc)
+        if (cc == GGML_CUDA_CC_VEGA) {
+            // Vega (gfx900): rocBLAS is broken, use custom F16 GEMM kernel
+            vega_hgemm(src0_ptr, src1_ptr, dst_dd_i,
+                       row_diff, src1_ncols, ne10, ne00, ne10, ldc,
+                       1.0f, 0.0f, stream);
+        } else if (!force_compute_type.fp16 && (GGML_CUDA_CC_IS_CDNA(cc)
                                         || GGML_CUDA_CC_IS_RDNA4(cc)
                                         || cc == GGML_CUDA_CC_VOLTA
                                         || force_compute_type.fp32))
@@ -1638,14 +1759,20 @@ static void ggml_cuda_op_mul_mat_cublas(
             const half alpha_f16 = 1.0f;
             const half beta_f16 = 0.0f;
 
-            CUBLAS_CHECK(
-                cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
-                        row_diff, src1_ncols, ne10,
-                        &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
-                                    src1_ptr,      CUDA_R_16F, ne10,
-                        &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
-                        CUBLAS_COMPUTE_16F,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            if (cc == GGML_CUDA_CC_VEGA) {
+                vega_hgemm(src0_ptr, src1_ptr, dst_dd_i,
+                           row_diff, src1_ncols, ne10, ne00, ne10, ldc,
+                           1.0f, 0.0f, stream);
+            } else {
+                CUBLAS_CHECK(
+                    cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                            row_diff, src1_ncols, ne10,
+                            &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
+                                        src1_ptr,      CUDA_R_16F, ne10,
+                            &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
+                            CUBLAS_COMPUTE_16F,
+                            CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            }
 
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
             to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
@@ -1673,13 +1800,20 @@ static void ggml_cuda_op_mul_mat_cublas(
         const float alpha = 1.0f;
         const float beta = 0.0f;
 
-        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
-        CUBLAS_CHECK(
-            cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
-                    row_diff, src1_ncols, ne10,
-                    &alpha, src0_ddf_i,  ne00,
-                            src1_ddf1_i, ne10,
-                    &beta,  dst_dd_i,    ldc));
+        if (cc == GGML_CUDA_CC_VEGA) {
+            // Vega (gfx900): rocBLAS is broken, use custom F32 GEMM kernel
+            vega_sgemm(src0_ddf_i, src1_ddf1_i, dst_dd_i,
+                       row_diff, src1_ncols, ne10, ne00, ne10, ldc,
+                       alpha, beta, stream);
+        } else {
+            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+            CUBLAS_CHECK(
+                cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                        row_diff, src1_ncols, ne10,
+                        &alpha, src0_ddf_i,  ne00,
+                                src1_ddf1_i, ne10,
+                        &beta,  dst_dd_i,    ldc));
+        }
     }
 
     GGML_UNUSED_VARS(dst, src1_ddq_i, src1_padded_row_size);

@@ -51,8 +51,9 @@ if (GGML_HIP_RCCL)
     find_package(rccl REQUIRED)
 endif()
 
-if (${hip_VERSION} VERSION_LESS 6.1)
-    message(FATAL_ERROR "At least ROCM/HIP V6.1 is required")
+# [patched for Vega gfx900] ROCm 5.7 is the last release supporting gfx900; hard floor lowered from 6.1 to 5.7
+if (${hip_VERSION} VERSION_LESS 5.7)
+    message(FATAL_ERROR "At least ROCM/HIP V5.7 is required (patched floor; upstream requires 6.1)")
 endif()
 
 message(STATUS "HIP and hipBLAS found")
@@ -136,6 +137,10 @@ endif()
 
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+
+    # [patched] clang 17 (ROCm 5.7) segfaults compiling pad.cu for gfx900 at -O3;
+    # clamp this translation unit to -O1 (pad is not a hot kernel).
+    set_source_files_properties(../ggml-cuda/pad.cu PROPERTIES COMPILE_OPTIONS "-O1")
     if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
         # CMake on Windows doesn't support the HIP language yet.
         # Therefore we workaround debug build's failure on HIP backend this way.
@@ -155,3 +160,11 @@ if (GGML_HIP_RCCL)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+
+# [patched] ROCm 5.7 amd_hip_bf16.h declares bf16 host conversion intrinsics as
+# bare __host__ __device__ (no inline), so every .cu TU emits a strong host-side
+# copy and lld-link fails with duplicate symbols. Fold identical definitions at
+# link time instead of patching the ROCm header installation.
+if (WIN32)
+    target_link_options(ggml-hip PRIVATE "SHELL:-Xlinker /FORCE:MULTIPLE")
+endif()

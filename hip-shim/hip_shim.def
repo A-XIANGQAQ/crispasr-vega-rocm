@@ -13,6 +13,7 @@ EXPORTS
     hipEventCreate=amdhip64.hipEventCreate
     hipEventCreateWithFlags=amdhip64.hipEventCreateWithFlags
     hipEventDestroy=amdhip64.hipEventDestroy
+    hipFuncSetAttribute=amdhip64.hipFuncSetAttribute
     hipEventElapsedTime=amdhip64.hipEventElapsedTime
     hipEventRecord=amdhip64.hipEventRecord
     hipEventSynchronize=amdhip64.hipEventSynchronize
@@ -63,3 +64,4 @@ EXPORTS
     hipStreamWaitEvent=amdhip64.hipStreamWaitEvent
     hipDrvLaunchKernelEx
     hipGetDevicePropertiesR0600
+    hipGetDeviceProperties=hipGetDevicePropertiesR0600

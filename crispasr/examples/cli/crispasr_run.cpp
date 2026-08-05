@@ -96,6 +96,27 @@ static std::string crispasr_resolve_watermark_model(const whisper_params& params
     return params.watermark_model;
 }
 
+// Prepend a short silence pad to PCM data to avoid first-second
+// distortion (the "electric sound" artifact). Addresses two known root
+// causes:
+//   1. MP3 encoder delay: LAME has a ~576-sample (24ms) encoder gap.
+//      Apps like WhatsApp/Telegram that don't handle gapless metadata
+//      will truncate the real audio start by the delay amount. Padding
+//      100ms of silence lets the encoder consume blank samples instead
+//      of speech.
+//   2. Vocoder cold-start: the 12Hz speech tokenizer decoder may
+//      produce garbled first frames on cold inference (Qwen3-TTS
+//      issue #219). The silence pad acts as warm-up context.
+// The pad is 100ms — inaudible at the start of a generated utterance.
+static std::vector<float> crispasr_pad_silence(const float* pcm, int n_samples, int sample_rate,
+                                                float pad_sec = 0.1f) {
+    int pad_samples = (int)(sample_rate * pad_sec);
+    std::vector<float> padded(pad_samples + n_samples, 0.0f);
+    if (n_samples > 0)
+        std::memcpy(padded.data() + pad_samples, pcm, (size_t)n_samples * sizeof(float));
+    return padded;
+}
+
 // Serialize synthesized (TTS/S2S) float32 PCM to `out_path` — WAV by
 // default, MP3 or AAC-LC/ADTS (in-tree glint encoder) when the path
 // ends in .mp3 / .aac. All carry AI-provenance metadata (WAV LIST/INFO
@@ -106,6 +127,13 @@ static std::string crispasr_resolve_watermark_model(const whisper_params& params
 static int crispasr_write_synth_audio(const std::string& out_path, const float* pcm, int n_samples, int sample_rate,
                                       const std::string& c2pa_cert, const std::string& c2pa_key,
                                       const std::string& cache_dir = "") {
+    // Prepend silence pad to avoid first-second distortion (MP3 encoder
+    // delay + vocoder cold-start). The padded vector owns the memory;
+    // all encoding calls below use ppcm/padded_n instead of raw pcm.
+    std::vector<float> padded_pcm = crispasr_pad_silence(pcm, n_samples, sample_rate);
+    const float* ppcm = padded_pcm.data();
+    int padded_n = (int)padded_pcm.size();
+
     auto has_ext = [&](const char* lo, const char* up) {
         return out_path.size() >= 4 &&
                (out_path.compare(out_path.size() - 4, 4, lo) == 0 || out_path.compare(out_path.size() - 4, 4, up) == 0);
@@ -144,8 +172,8 @@ static int crispasr_write_synth_audio(const std::string& out_path, const float* 
     std::string blob;
     const char* c2pa_fmt = "audio/wav";
     if (aac_mp4 || opus_mp4) {
-        blob = opus_mp4 ? crispasr_mp4::make_opus_mp4(pcm, n_samples, sample_rate)
-                        : crispasr_mp4::make_aac_mp4(pcm, n_samples, sample_rate);
+        blob = opus_mp4 ? crispasr_mp4::make_opus_mp4(ppcm, padded_n, sample_rate)
+                        : crispasr_mp4::make_aac_mp4(ppcm, padded_n, sample_rate);
         if (blob.empty()) {
             fprintf(stderr, "crispasr: error: MP4 encoding failed for '%s'\n", path.c_str());
             return 16;
@@ -168,7 +196,7 @@ static int crispasr_write_synth_audio(const std::string& out_path, const float* 
                     path.c_str());
         }
     } else if (is_mp3) {
-        blob = crispasr_make_mp3(pcm, n_samples, sample_rate);
+        blob = crispasr_make_mp3(ppcm, padded_n, sample_rate);
         c2pa_fmt = "audio/mpeg";
         if (blob.empty()) {
             fprintf(stderr, "crispasr: error: MP3 encoding failed for '%s'\n", path.c_str());
@@ -177,14 +205,14 @@ static int crispasr_write_synth_audio(const std::string& out_path, const float* 
     } else if (is_aac || is_opus) {
         // C2PA remux opted out — raw ADTS/Ogg, watermark + tag only.
         blob =
-            is_aac ? crispasr_make_aac(pcm, n_samples, sample_rate) : crispasr_make_opus(pcm, n_samples, sample_rate);
+            is_aac ? crispasr_make_aac(ppcm, padded_n, sample_rate) : crispasr_make_opus(ppcm, padded_n, sample_rate);
         c2pa_fmt = "";
         if (blob.empty()) {
             fprintf(stderr, "crispasr: error: %s encoding failed for '%s'\n", is_aac ? "AAC" : "Opus", path.c_str());
             return 16;
         }
     } else {
-        blob = crispasr_make_wav_int16(pcm, n_samples, sample_rate);
+        blob = crispasr_make_wav_int16(ppcm, padded_n, sample_rate);
     }
 
     // C2PA Content Credentials signing. Effective signer creds are the

@@ -22,6 +22,91 @@ typedef unsigned __int64 size_t_shim;
 __declspec(dllimport) void* __stdcall LoadLibraryA(const char* lpLibFileName);
 __declspec(dllimport) void* __stdcall GetProcAddress(void* hModule, const char* lpProcName);
 __declspec(dllimport) void* __stdcall GetModuleHandleA(const char* lpModuleName);
+__declspec(dllimport) void* __stdcall CreateFileA(const char* fn, unsigned long acc, unsigned long share, void* sa, unsigned long disp, unsigned long flags, void* tmpl);
+__declspec(dllimport) int __stdcall WriteFile(void* h, const void* buf, unsigned long len, unsigned long* written, void* ov);
+__declspec(dllimport) int __stdcall CloseHandle(void* h);
+
+/* ---- debug dump helper (CRT-free) ---- */
+static void shim_debug_dump(const char* fn, const void* data, unsigned long len) {
+    void* h = CreateFileA(fn, 0x40000000, 0, 0, 2, 0x80, 0); /* GENERIC_WRITE, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL */
+    if (h == (void*)-1) return;
+    WriteFile(h, data, len, &len, 0);
+    CloseHandle(h);
+}
+
+/* ======================================================================
+ * DLL forwarders: export symbols from this DLL but forward them directly
+ * to amdhip64.dll (ROCm 5.7 runtime).  The "othermodule.function" syntax
+ * with a dot tells link.exe to create a forwarder export, not an alias.
+ * This replaces the .def-based forwarding that MSVC 14.51 link.exe was
+ * silently ignoring (treating entries as unresolved externals).
+ * ==================================================================== */
+#pragma comment(linker, "/export:__hipPopCallConfiguration=amdhip64.__hipPopCallConfiguration")
+#pragma comment(linker, "/export:__hipPushCallConfiguration=amdhip64.__hipPushCallConfiguration")
+#pragma comment(linker, "/export:__hipRegisterFatBinary=amdhip64.__hipRegisterFatBinary")
+#pragma comment(linker, "/export:__hipRegisterFunction=amdhip64.__hipRegisterFunction")
+#pragma comment(linker, "/export:__hipUnregisterFatBinary=amdhip64.__hipUnregisterFatBinary")
+#pragma comment(linker, "/export:hipDeviceCanAccessPeer=amdhip64.hipDeviceCanAccessPeer")
+#pragma comment(linker, "/export:hipDeviceEnablePeerAccess=amdhip64.hipDeviceEnablePeerAccess")
+#pragma comment(linker, "/export:hipDeviceGetAttribute=amdhip64.hipDeviceGetAttribute")
+#pragma comment(linker, "/export:hipDeviceGetDefaultMemPool=amdhip64.hipDeviceGetDefaultMemPool")
+#pragma comment(linker, "/export:hipDeviceSynchronize=amdhip64.hipDeviceSynchronize")
+#pragma comment(linker, "/export:hipEventCreate=amdhip64.hipEventCreate")
+#pragma comment(linker, "/export:hipEventCreateWithFlags=amdhip64.hipEventCreateWithFlags")
+#pragma comment(linker, "/export:hipEventDestroy=amdhip64.hipEventDestroy")
+#pragma comment(linker, "/export:hipFuncSetAttribute=amdhip64.hipFuncSetAttribute")
+#pragma comment(linker, "/export:hipEventElapsedTime=amdhip64.hipEventElapsedTime")
+#pragma comment(linker, "/export:hipEventRecord=amdhip64.hipEventRecord")
+#pragma comment(linker, "/export:hipEventSynchronize=amdhip64.hipEventSynchronize")
+#pragma comment(linker, "/export:hipExtGetLastError=amdhip64.hipGetLastError")
+#pragma comment(linker, "/export:hipExtModuleLaunchKernel=amdhip64.hipExtModuleLaunchKernel")
+#pragma comment(linker, "/export:hipFree=amdhip64.hipFree")
+#pragma comment(linker, "/export:hipFreeAsync=amdhip64.hipFreeAsync")
+#pragma comment(linker, "/export:hipGetDevice=amdhip64.hipGetDevice")
+#pragma comment(linker, "/export:hipGetDeviceCount=amdhip64.hipGetDeviceCount")
+#pragma comment(linker, "/export:hipGetErrorName=amdhip64.hipGetErrorName")
+#pragma comment(linker, "/export:hipGetErrorString=amdhip64.hipGetErrorString")
+#pragma comment(linker, "/export:hipGetLastError=amdhip64.hipGetLastError")
+#pragma comment(linker, "/export:hipGetStreamDeviceId=amdhip64.hipGetStreamDeviceId")
+#pragma comment(linker, "/export:hipHostFree=amdhip64.hipHostFree")
+#pragma comment(linker, "/export:hipHostGetDevicePointer=amdhip64.hipHostGetDevicePointer")
+#pragma comment(linker, "/export:hipHostMalloc=amdhip64.hipHostMalloc")
+#pragma comment(linker, "/export:hipHostRegister=amdhip64.hipHostRegister")
+#pragma comment(linker, "/export:hipHostUnregister=amdhip64.hipHostUnregister")
+#pragma comment(linker, "/export:hipLaunchCooperativeKernel=amdhip64.hipLaunchCooperativeKernel")
+#pragma comment(linker, "/export:hipLaunchKernel=amdhip64.hipLaunchKernel")
+#pragma comment(linker, "/export:hipMalloc=amdhip64.hipMalloc")
+#pragma comment(linker, "/export:hipMallocAsync=amdhip64.hipMallocAsync")
+#pragma comment(linker, "/export:hipMallocManaged=amdhip64.hipMallocManaged")
+#pragma comment(linker, "/export:hipMemAdvise=amdhip64.hipMemAdvise")
+#pragma comment(linker, "/export:hipMemcpy=amdhip64.hipMemcpy")
+#pragma comment(linker, "/export:hipMemcpy2D=amdhip64.hipMemcpy2D")
+#pragma comment(linker, "/export:hipMemcpy2DAsync=amdhip64.hipMemcpy2DAsync")
+#pragma comment(linker, "/export:hipMemcpyAsync=amdhip64.hipMemcpyAsync")
+#pragma comment(linker, "/export:hipMemcpyPeerAsync=amdhip64.hipMemcpyPeerAsync")
+/* hipMemGetInfo: local implementation with fallback (see below) */
+#pragma comment(linker, "/export:hipMemPoolTrimTo=amdhip64.hipMemPoolTrimTo")
+#pragma comment(linker, "/export:hipMemset=amdhip64.hipMemset")
+#pragma comment(linker, "/export:hipMemsetAsync=amdhip64.hipMemsetAsync")
+#pragma comment(linker, "/export:hipModuleGetFunction=amdhip64.hipModuleGetFunction")
+#pragma comment(linker, "/export:hipModuleLoad=amdhip64.hipModuleLoad")
+#pragma comment(linker, "/export:hipModuleLoadData=amdhip64.hipModuleLoadData")
+#pragma comment(linker, "/export:hipModuleOccupancyMaxActiveBlocksPerMultiprocessor=amdhip64.hipModuleOccupancyMaxActiveBlocksPerMultiprocessor")
+#pragma comment(linker, "/export:hipModuleUnload=amdhip64.hipModuleUnload")
+#pragma comment(linker, "/export:hipOccupancyMaxActiveBlocksPerMultiprocessor=amdhip64.hipOccupancyMaxActiveBlocksPerMultiprocessor")
+#pragma comment(linker, "/export:hipPointerGetAttributes=amdhip64.hipPointerGetAttributes")
+#pragma comment(linker, "/export:hipRuntimeGetVersion=amdhip64.hipRuntimeGetVersion")
+#pragma comment(linker, "/export:hipSetDevice=amdhip64.hipSetDevice")
+#pragma comment(linker, "/export:hipStreamCreateWithFlags=amdhip64.hipStreamCreateWithFlags")
+#pragma comment(linker, "/export:hipStreamDestroy=amdhip64.hipStreamDestroy")
+#pragma comment(linker, "/export:hipStreamIsCapturing=amdhip64.hipStreamIsCapturing")
+#pragma comment(linker, "/export:hipStreamQuery=amdhip64.hipStreamQuery")
+#pragma comment(linker, "/export:hipStreamSynchronize=amdhip64.hipStreamSynchronize")
+#pragma comment(linker, "/export:hipStreamWaitEvent=amdhip64.hipStreamWaitEvent")
+
+/* Local alias: hipGetDeviceProperties → hipGetDevicePropertiesR0600 (no dot = alias, not forwarder) */
+#pragma comment(linker, "/export:hipGetDeviceProperties=amdhip64.hipGetDeviceProperties")
+#pragma comment(linker, "/export:hipGetDevicePropertiesR0600=amdhip64.hipGetDeviceProperties")
 
 /* ---- tiny CRT-free helpers ---- */
 static void shim_zero(void* p, size_t_shim n) {
@@ -274,7 +359,7 @@ static int shim_resolve57(void) {
     return g_pGetProps57 != 0;
 }
 
-__declspec(dllexport) int hipGetDevicePropertiesR0600(hipDevicePropR0600* dst, int deviceId) {
+static int hipGetDevicePropertiesR0600_impl(hipDevicePropR0600* dst, int deviceId) {
     hipDeviceProp57 src;
     int err;
     if (!dst) return 1; /* hipErrorInvalidValue */
@@ -361,6 +446,53 @@ __declspec(dllexport) int hipGetDevicePropertiesR0600(hipDevicePropR0600* dst, i
 __declspec(dllexport) int hipDrvLaunchKernelEx(void* a, void* b, void* c, void* d, void* e, void* f, void* g) {
     (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g;
     return 1; /* hipErrorNotSupported */
+}
+
+/* ======================================================================
+ * hipMemGetInfo workaround: ROCm 5.7 returns "invalid argument" for
+ * Vega GPUs on Windows.  Try the real function first; on failure, fall
+ * back to querying totalGlobalMem from hipGetDeviceProperties.
+ * ==================================================================== */
+typedef int (*MemGetInfoFn)(size_t_shim* free, size_t_shim* total);
+typedef int (*GetPropsFn)(void* prop, int deviceId);
+
+__declspec(dllexport) int hipMemGetInfo(size_t_shim* free, size_t_shim* total) {
+    void* h;
+    MemGetInfoFn pReal;
+    int err;
+
+    if (!free || !total) return 1;
+    h = GetModuleHandleA("amdhip64.dll");
+    if (!h) h = LoadLibraryA("amdhip64.dll");
+    if (!h) { *free = 0; *total = 0; return 1; }
+
+    /* Try the real hipMemGetInfo first */
+    pReal = (MemGetInfoFn)GetProcAddress(h, "hipMemGetInfo");
+    if (pReal) {
+        err = pReal(free, total);
+        if (err == 0) return 0; /* success */
+    }
+
+    /* Fallback: query device properties for totalGlobalMem */
+    {
+        GetPropsFn pProps = (GetPropsFn)GetProcAddress(h, "hipGetDeviceProperties");
+        if (pProps) {
+            /* ROCm 5.7 hipDeviceProp_t: totalGlobalMem is at offset 256 */
+            char prop[800];
+            size_t_shim totalMem;
+            shim_zero(prop, sizeof(prop));
+            err = pProps(prop, 0);
+            if (err == 0) {
+                shim_copy(&totalMem, prop + 256, sizeof(totalMem));
+                *total = totalMem;
+                *free  = (size_t_shim)(totalMem * 9 / 10); /* 90% free as estimate */
+                return 0;
+            }
+        }
+    }
+
+    *free = 0; *total = 0;
+    return 1;
 }
 
 /* Minimal DLL entry point (no CRT) */
