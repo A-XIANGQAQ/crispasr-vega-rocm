@@ -1,10 +1,15 @@
 /*
  * amdhip64_7.dll shim: translates ROCm 7.x ABI (TheRock) to ROCm 5.7 runtime.
  *
- * - 39 symbols are forwarded directly to amdhip64.dll (ROCm 5.7) via hip_shim.def
- * - hipGetDevicePropertiesR0600 is implemented here: it calls ROCm 5.7's
- *   hipGetDeviceProperties and translates the 5.7 hipDeviceProp_t layout into
- *   the 7.x layout that TheRock-built binaries expect.
+ * - 60+ symbols are forwarded directly to amdhip64.dll (ROCm 5.7) via
+ *   #pragma comment(linker, "/export:xxx=amdhip64.xxx") forwarders below.
+ *   (Do NOT use a .def file — MSVC 14.51 link.exe silently ignores .def
+ *   forwarders, leaving entry points unresolved at load time.)
+ * - hipGetDeviceProperties / hipGetDevicePropertiesR0600 are implemented locally:
+ *   they call ROCm 5.7's hipGetDeviceProperties and translate the 5.7
+ *   hipDeviceProp_t layout into the 7.x layout that TheRock-built binaries
+ *   (e.g. ggml-hip.dll) expect.  Forwarding these would return misaligned fields
+ *   (garbage cc/warpSize/VRAM) because of the 5.7→7.x layout difference.
  *
  * No CRT dependency: manual kernel32 imports + tiny mem helpers.
  */
@@ -104,9 +109,15 @@ static void shim_debug_dump(const char* fn, const void* data, unsigned long len)
 #pragma comment(linker, "/export:hipStreamSynchronize=amdhip64.hipStreamSynchronize")
 #pragma comment(linker, "/export:hipStreamWaitEvent=amdhip64.hipStreamWaitEvent")
 
-/* Local alias: hipGetDeviceProperties → hipGetDevicePropertiesR0600 (no dot = alias, not forwarder) */
-#pragma comment(linker, "/export:hipGetDeviceProperties=amdhip64.hipGetDeviceProperties")
-#pragma comment(linker, "/export:hipGetDevicePropertiesR0600=amdhip64.hipGetDeviceProperties")
+/* hipGetDeviceProperties / hipGetDevicePropertiesR0600 are implemented locally
+ * (structure translation from ROCm 5.7 layout to 7.x layout).  ggml-hip.dll is
+ * compiled against TheRock 7.x headers: it calls hipGetDevicePropertiesR0600 and
+ * reads the returned struct using the 7.x layout (1472 bytes).  Forwarding straight
+ * to amdhip64.dll would hand back the 5.7 layout (~800 bytes) → field misalignment
+ * → garbage cc/warpSize/VRAM.  So we MUST export the translating implementation.
+ * The function hipGetDevicePropertiesR0600 is defined below with __declspec(dllexport);
+ * hipGetDeviceProperties is aliased to it. */
+#pragma comment(linker, "/export:hipGetDeviceProperties=hipGetDevicePropertiesR0600")
 
 /* ---- tiny CRT-free helpers ---- */
 static void shim_zero(void* p, size_t_shim n) {
@@ -359,7 +370,7 @@ static int shim_resolve57(void) {
     return g_pGetProps57 != 0;
 }
 
-static int hipGetDevicePropertiesR0600_impl(hipDevicePropR0600* dst, int deviceId) {
+__declspec(dllexport) int hipGetDevicePropertiesR0600(hipDevicePropR0600* dst, int deviceId) {
     hipDeviceProp57 src;
     int err;
     if (!dst) return 1; /* hipErrorInvalidValue */

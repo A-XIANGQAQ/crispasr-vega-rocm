@@ -54,12 +54,15 @@
 ## 性能实测 / Performance Benchmarks
 
 > 测试日期：2026-07-28 | CrispASR v0.8.14 | Vega 56/64 (gfx900, 8GB VRAM) | ROCm 5.7 + TheRock HIP (clang 23.0.0)
+>
+> 2026-08-06 第三次修复后复测：SenseVoice EN 实时率进一步提升至 **32.4x**（见下方更新）
 
 ### ASR 语音识别 (GPU 加速)
 
 | 模型 | 量化 | 大小 | 语言 | 音频时长 | 处理时间 | 实时率 | 状态 |
 |------|------|------|------|---------|---------|--------|------|
-| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.47s | **23.6x** | GPU 已验证 |
+| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.34s | **32.4x** 🔥 | GPU 已验证 (2026-08-06) |
+| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.47s | **23.6x** | GPU 已验证 (基线) |
 | SenseVoice Small | Q4_K | 129MB | ZH | 13.1s | 0.47s | **27.7x** | GPU 已验证 |
 | Qwen3-ASR 0.6B | Q4_K | 602MB | EN | 11.0s | 2.66s | 4.1x | GPU 已验证 |
 | Qwen3-ASR 0.6B | Q4_K | 602MB | ZH | 13.1s | 3.19s | 4.1x | GPU 已验证 |
@@ -148,8 +151,10 @@ cd C:\cabuild\crispasr
 powershell -ExecutionPolicy Bypass -File ..\..\scripts\build-hip-therock.ps1 -SourceDir C:\cabuild\crispasr
 
 # 3. 编译 Shim DLL（在 VS 2022 Developer Command Prompt 中）
+#    注意：不要传 /DEF:hip_shim.def —— MSVC 14.51 会静默忽略 .def 转发，
+#    导出全靠 hip_shim.c 里的 #pragma comment(linker,"/export:...") + __declspec(dllexport)
 cl /O2 /GS- /c hip-shim\hip_shim.c
-link /DLL /OUT:amdhip64_7.dll hip_shim.obj /DEF:hip-shim\hip_shim.def /NODEFAULTLIB kernel32.lib
+link /DLL /ENTRY:DllMainCRTStartup /OUT:amdhip64_7.dll hip_shim.obj /NODEFAULTLIB kernel32.lib
 ```
 </details>
 
@@ -249,6 +254,17 @@ Kokoro 模型在 CrispASR 中有内置的 "Metal-hang workaround"，强制 `gen=
 | **rocBLAS 在 gfx900 上 GEMM 全挂** | `CUBLAS_STATUS_INTERNAL_ERROR`：Sgemm / GemmEx(F16→F32) / GemmEx(F16→F16) 全部失败 | 换 dispatcher、TheRock 21MB 库（ABI 不兼容）、完整 145MB 库（缺依赖）均无效 → **在 ggml-cuda.cu 中写自定义 GEMM 内核绕开 rocBLAS** |
 | MMF 内核不能当通用 GEMM 用 | 强制 `ggml_cuda_mul_mat_f` 后 `mmf.cuh:746: GGML_ASSERT(ids \|\| ncols_dst <= 16)` | MMF 只支持 `ncols ≤ 16`，编码器 384 列直接断言；必须自研内核 |
 | PowerShell PATH 带空格被解析 | `d:\Program: The term ... not recognized` | 命令执行环境 PATH 含空格路径，须用完整路径调用 cmake / ninja |
+
+### 第三次编译新增坑（2026-08-06，Shim 结构体翻译专项修复）
+
+> 本次修复最终让 SenseVoice 实时率从 23.6x **提升到 32.4x**，并彻底解决 rocBLAS `Could not initialize Tensile host` 崩溃。
+
+| 坑 | 现象 | 解决方案 |
+|----|------|----------|
+| **Shim 转发方向搞反（第二次记录需修正）** | 第二次把 `hipGetDeviceProperties`/`hipGetDevicePropertiesR0600` 直接转发到 5.7，导致诊断横幅出现 `cc 1.0`、`Wave Size 1590000`、`VRAM 4194304 MiB` 垃圾值 | 实测确认 `ggml-hip.dll` 是用 **TheRock 7.x 头**编译的，调用 `hipGetDevicePropertiesR0600` 后按 **7.x 布局（1472 字节）** 解读返回值。直接转发返回的是 5.7 布局（~800 字节），字段错位。**必须导出翻译实现**（5.7→7.x 布局英文翻译），不能转发 |
+| Shim 翻译实现未导出 | 源码里 `hipGetDevicePropertiesR0600_impl` 是 `static`，编译后没进导出表，ggml-hip 拿不到翻译 | 去掉 `static`、加 `__declspec(dllexport)`，并把 `hipGetDeviceProperties` 用 `#pragma comment(linker,"/export:hipGetDeviceProperties=hipGetDevicePropertiesR0600")` 别名到翻译实现 |
+| rocBLAS `Could not initialize Tensile host` 崩溃 | `Unknown exception thrown`，退出码 `0xC0000409`（fail-fast） | 根因是设备属性错乱（cc=1.0）导致不走 Vega 自定义 GEMM 路径而进入 rocBLAS。修正 shim 翻译后 cc=9.0、wave=64，自动走 `vega_*` 自定义 GEMM，崩溃消失 |
+| 沙箱/权限无法写 G 盘 | `Copy-Item` 报 `path not in allowlist` | 沙箱仅允许写 C 盘用户目录；G 盘部署需在用户终端手动执行 `Copy-Item` |
 
 ---
 

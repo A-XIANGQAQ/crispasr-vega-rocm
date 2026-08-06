@@ -1729,12 +1729,12 @@ static void ggml_cuda_op_mul_mat_cublas(
         }
         const half * src1_ptr = src1->type == GGML_TYPE_F16 ? (const half *) src1_ddf_i : src1_as_f16.get();
 
-        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
-
         const auto & force_compute_type = ggml_cuda_cublas_get_force_compute_type();
 
         if (cc == GGML_CUDA_CC_VEGA) {
-            // Vega (gfx900): rocBLAS is broken, use custom F16 GEMM kernel
+            // Vega (gfx900): rocBLAS is broken, use custom F16 GEMM kernel.
+            // Must skip cublasSetStream — cublas_handle() would trigger
+            // cublasCreate which fails when rocBLAS can't initialize Tensile.
             vega_hgemm(src0_ptr, src1_ptr, dst_dd_i,
                        row_diff, src1_ncols, ne10, ne00, ne10, ldc,
                        1.0f, 0.0f, stream);
@@ -1745,6 +1745,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         {
             const float alpha = 1.0f;
             const float beta = 0.0f;
+            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
@@ -1764,6 +1765,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                            row_diff, src1_ncols, ne10, ne00, ne10, ldc,
                            1.0f, 0.0f, stream);
             } else {
+                CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
                 CUBLAS_CHECK(
                     cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                             row_diff, src1_ncols, ne10,
@@ -2631,9 +2633,13 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
 
     //TODO update for generic tensor parallelism
     const int cc                 = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    bool use_batched_cublas_f16  = src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16);
-    bool use_batched_cublas_bf16 = src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc);
-    bool use_batched_cublas_f32  = src0->type == GGML_TYPE_F32;
+    // Vega (gfx900): rocBLAS 不可用，cublas_handle() 返回 nullptr。
+    // 若进入 batched cublas 路径会在 cublasSetStream(nullptr) 触发 CUBLAS_CHECK
+    // abort。禁用三个 batched 条件，使其回退到 ggml_cuda_op_mul_mat_cublas ——
+    // 该路径内部已有 Vega 自定义 GEMM 拦截（vega_sgemm/vega_hgemm）。
+    bool use_batched_cublas_f16  = src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16) && cc != GGML_CUDA_CC_VEGA;
+    bool use_batched_cublas_bf16 = src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc) && cc != GGML_CUDA_CC_VEGA;
+    bool use_batched_cublas_f32  = src0->type == GGML_TYPE_F32 && cc != GGML_CUDA_CC_VEGA;
 
     if (!split && use_mul_mat_vec_f) {
         // the custom F16 vector kernel can be used over batched cuBLAS GEMM

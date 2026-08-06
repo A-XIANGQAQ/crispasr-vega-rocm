@@ -1448,8 +1448,14 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handle(int device) {
         if (cublas_handles[device] == nullptr) {
             ggml_cuda_set_device(device);
-            CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
-            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
+            cublasStatus_t err = cublasCreate(&cublas_handles[device]);
+            if (err != CUBLAS_STATUS_SUCCESS) {
+                GGML_LOG_ERROR("cublasCreate failed (status %d) on device %d — "
+                               "custom GEMM kernels will be used instead\n", err, device);
+                cublas_handles[device] = nullptr;
+                return nullptr;
+            }
+            cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH);
         }
         return cublas_handles[device];
     }

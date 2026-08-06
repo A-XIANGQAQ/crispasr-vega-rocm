@@ -18,6 +18,8 @@ bin-rocm*/
 /samples/
 /third_party/
 /exports_raw.txt
+# Untracked original CrispASR clone (patched source of truth lives in crispasr/)
+/CrispASR/
 
 # hip-shim debug leftovers (keep hip_shim.c / hip_shim.def only)
 hip-shim/amdhip64_generated.def

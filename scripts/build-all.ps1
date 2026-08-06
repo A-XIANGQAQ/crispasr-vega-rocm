@@ -14,7 +14,8 @@
 
 param(
     [string]$RocmPath = "",
-    [string]$MirrorDir = "C:\cabuild\crispasr"
+    [string]$MirrorDir = "C:\cabuild\crispasr",
+    [switch]$SkipDeploy
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,6 +92,20 @@ if ($LASTEXITCODE -ge 8) {
     exit 1
 }
 Write-Host "  [OK] Source mirrored"
+
+# --- 3rd-build fix: CMake needs git metadata for version info ---------------
+# robocopy /XD .git strips git metadata; re-init a minimal repo in the mirror.
+if (-not (Test-Path "$MirrorDir\.git")) {
+    $gitExe = "C:\Program Files\Git\cmd\git.exe"
+    if (Test-Path $gitExe) {
+        & $gitExe -C $MirrorDir init -q
+        & $gitExe -C $MirrorDir add -A
+        & $gitExe -C $MirrorDir -c user.email=mirror@local -c user.name=mirror commit -qm "mirror"
+        Write-Host "  [OK] git repo initialized in mirror (CMake version info)"
+    } else {
+        Write-Host "  [WARN] git.exe not found at $gitExe — CMake version detection may fail"
+    }
+}
 
 # ----------------------------------------------------------
 # Step 2: Build CrispASR with TheRock clang 23 (hipcc-wrap)
@@ -182,8 +197,8 @@ try {
     Write-Host "  Configuring CMake..."
     cmake -G $generator -B $BUILD_DIR `
         -DCMAKE_BUILD_TYPE=Release `
-        -DCMAKE_C_COMPILER=$wrapBat `
-        -DCMAKE_CXX_COMPILER=$wrapBat `
+        "-DCMAKE_C_COMPILER=$wrapBat" `
+        "-DCMAKE_CXX_COMPILER=$wrapBat" `
         "-DCMAKE_SHARED_LINKER_FLAGS=$builtinsShort" `
         -DCMAKE_PREFIX_PATH="$RocmPath\lib\cmake;$RocmPath\share\rocm\cmake" `
         -DROCM_PATH="$RocmPath" `
@@ -202,8 +217,8 @@ try {
         -DGGML_LLAMAFILE_DEFAULT=ON `
         -DCRISPASR_BUILD_EXAMPLES=ON `
         -DCRISPASR_BUILD_TESTS=OFF `
-        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$OUT_DIR `
-        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$OUT_DIR
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$OUT_DIR" `
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$OUT_DIR"
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] CMake configuration failed!"
@@ -218,7 +233,10 @@ try {
             # Append to CMAKE_CXX_FLAGS and CMAKE_C_FLAGS
             $cache = $cache -replace '(CMAKE_CXX_FLAGS:STRING=[^\r\n]*)', '$1 -mcode-object-version=4'
             $cache = $cache -replace '(CMAKE_C_FLAGS:STRING=[^\r\n]*)', '$1 -mcode-object-version=4'
-            Set-Content $cacheFile -Value $cache -Encoding UTF8
+            # 3rd-build fix: must write WITHOUT BOM — PowerShell 5.1 "-Encoding UTF8"
+            # emits a BOM (EF BB BF) and CMake then fails with "Parse error in cache
+            # file ... on line 1. Offending entry: ﻿#" when ninja triggers a re-run.
+            [System.IO.File]::WriteAllText($cacheFile, $cache, (New-Object System.Text.UTF8Encoding($false)))
             Write-Host "  [OK] Added -mcode-object-version=4 to CMake cache"
         }
     }
@@ -263,7 +281,12 @@ try {
         Write-Host "[ERROR] Shim DLL compilation failed (cl step)"
         exit 1
     }
-    link /DLL /OUT:amdhip64_7.dll hip_shim.obj /DEF:hip_shim.def /NODEFAULTLIB kernel32.lib
+    # 3rd-build fix: do NOT pass /DEF:hip_shim.def.  MSVC 14.51 link.exe silently
+    # ignores .def forwarders (entry-point-not-found at runtime), and hip_shim.c
+    # already declares every export via #pragma comment(linker, "/export:...") plus
+    # __declspec(dllexport) on the local functions.  Passing /DEF would double-export
+    # hipGetDevicePropertiesR0600 (dup symbol) and diverge from the verified build.
+    link /DLL /ENTRY:DllMainCRTStartup /OUT:amdhip64_7.dll hip_shim.obj /NODEFAULTLIB kernel32.lib
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Shim DLL linking failed (link step)"
         exit 1
@@ -276,6 +299,7 @@ try {
 # ----------------------------------------------------------
 # Step 4: Copy binaries to repo bin-hip/
 # ----------------------------------------------------------
+if (-not $SkipDeploy) {
 Write-Host ""
 Write-Host "[4/5] Copying binaries..."
 
@@ -374,6 +398,13 @@ $builtinsLib = Get-ChildItem "$RocmPath\lib\clang\*\lib\windows\clang_rt.builtin
 if ($builtinsLib) {
     Copy-Item $builtinsLib.FullName $REPO_BIN -Force
     Write-Host "  [OK] clang_rt.builtins-x86_64.lib"
+}
+} else {
+    Write-Host ""
+    Write-Host "[4/5] -SkipDeploy specified — binaries remain in: $OUT_DIR"
+    Write-Host "[5/5] Skipped. Deploy manually after ABI check:"
+    Write-Host "  Copy-Item '$OUT_DIR\crispasr.exe'  '$REPO_ROOT\bin-hip\' -Force"
+    Write-Host "  Copy-Item '$OUT_DIR\ggml-hip.dll' '$REPO_ROOT\bin-hip\' -Force"
 }
 
 # ----------------------------------------------------------
