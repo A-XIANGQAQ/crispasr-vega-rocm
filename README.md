@@ -90,6 +90,17 @@
 
 ## 快速上手 / Quick Start
 
+> **一次跑通全流程**（全部坑已由脚本处理）：装驱动 → 装 HIP SDK → 装 TheRock → 一键编译 → 跑。约 30 分钟。
+
+| 步骤 | 做什么 | 命令/说明 |
+|------|--------|-----------|
+| 0 | 前置条件 | Vega 显卡 + Win10/11 + VS2022 + Python 3.10+ |
+| 1 | 装驱动 | Sophronia 社区驱动（官方 Adrenalin 不支持 Vega 的 ROCm） |
+| 2 | 装 HIP SDK | AMD HIP SDK 5.7.1（`C:\Program Files\AMD\ROCm\5.7`） |
+| 3 | 装 TheRock | `pip install therock-tools && therock install --device-gfx900` |
+| 4 | 一键编译 | `powershell -File scripts\build-all.ps1`（10-20 分钟） |
+| 5 | 运行 | `bin-hip\crispasr.exe --diagnostics` 验证，再跑 ASR |
+
 ### 前置条件 / Prerequisites
 
 - AMD Vega 56/64 (gfx900) 或兼容显卡
@@ -229,42 +240,27 @@ Kokoro 模型在 CrispASR 中有内置的 "Metal-hang workaround"，强制 `gen=
 
 ## 踩坑清单 / Common Pitfalls
 
-| 坑 | 现象 | 解决方案 |
-|----|------|----------|
-| HIP SDK 版本显示 | 下载 5.7.1，安装后目录显示 5.7 | 正常现象，ROCm 目录名只含主次版本号 |
-| rocBLAS 不支持 gfx900 | 运行时报 "invalid device function" | 用 advanced-lvl-up 项目的 gfx800-gfx900 库替换 |
-| 官方驱动无 ROCm 支持 | "no ROCm-capable device is detected" | 必须用 Sophronia 社区驱动，官方 Adrenalin 不行 |
-| hipcc 路径含空格崩溃 | 编译器报错或静默退出 | 将源码镜像到无空格路径再编译 |
-| code object v5 不兼容 | "shared object initialization failed" | 编译加 `-mcode-object-version=4` |
-| ROCm 7.x vs 5.7 ABI 不兼容 | STATUS_ENTRYPOINT_NOT_FOUND | 需要编译 Shim DLL 桥接两个版本 |
-| clang 前端崩溃 | 编译中途内存不足退出 | 降到 `-j 2` 并行度 |
-| Vega 模型加载挂起 | 加载模型时卡死 | 设置 `HSA_ENABLE_SDMA=0` |
+> 以下坑全部已在仓库中解决：源码已打补丁、脚本已固化处理。**你只需要跑一键脚本，遇到对应现象时对照本表即可。** 其中 `build-all.ps1` 会自动处理编译期的坑（标 ✔），运行期的坑由 `run_crispasr_hip.bat` 的环境变量（标 ★）解决。
 
-### 第二次编译新增坑（2026-08-05，杀毒误杀后重建）
+| 坑 | 现象 | 解决方案 | 谁处理 |
+|----|------|----------|--------|
+| 官方驱动无 ROCm 支持 | `no ROCm-capable device is detected` | 必须用 Sophronia 社区驱动，官方 Adrenalin 不行 | 手动（安装驱动） |
+| HIP SDK 版本显示 | 下载 5.7.1，安装后目录显示 5.7 | 正常现象，ROCm 目录名只含主次版本号 | 手动（无需处理） |
+| hipcc 路径含空格崩溃 | 编译器报错或静默退出 | 源码自动镜像到无空格路径 `C:\cabuild\crispasr` | ✔ 脚本 |
+| code object v5 不兼容 | `shared object initialization failed` | 编译加 `-mcode-object-version=4`（脚本注入 CMakeCache） | ✔ 脚本 |
+| clang 前端崩溃 | 编译中途内存不足退出 | 降到 `-j 2` 并行度 | ✔ 脚本 |
+| SHARED 库缺 clang builtins | `lld-link: undefined symbol: __truncsfhf2` | `CMAKE_SHARED_LINKER_FLAGS` 指向 `clang_rt.builtins-x86_64.lib` | ✔ 脚本 |
+| ninja 锁文件残留 | `ninja: error: WriteFile(.ninja_lock): Permission denied` | 自动删除 `build-*/.ninja_lock` | ✔ 脚本 |
+| CMakeCache 带 BOM 解析失败 | `Parse error in cache file ... Offending entry` | 无 BOM 写回 CMakeCache | ✔ 脚本 |
+| 镜像目录缺 git 元数据 | CMake 版本信息检测失败 | 脚本自动在镜像目录 re-init 最小 git 仓库 | ✔ 脚本 |
+| ROCm 7.x vs 5.7 ABI 不兼容 | `STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139)` | Shim DLL 桥接：60+ 符号转发 + 结构体翻译 | ✔ 脚本（编译 shim） |
+| Shim 结构体翻译错位 | 诊断横幅 `cc 1.0`、`Wave Size 1590000`、`VRAM 4194304 MiB` 垃圾值 | shim 导出本地翻译实现（5.7→7.x 布局），不直接转发 | ✔ 已修源码 |
+| rocBLAS 在 gfx900 上 GEMM 全挂 | `CUBLAS_STATUS_INTERNAL_ERROR` / `Could not initialize Tensile host` | 仓库内置自定义 `vega_*` GEMM 内核绕开 rocBLAS | ✔ 已修源码 |
+| 杀毒误杀编译产物 | DLL 被当木马删除，运行报 DLL not found | 将 bin-hip 加入杀毒白名单 | 手动 |
+| Vega 模型加载挂起 | 加载模型时卡死 | `HSA_ENABLE_SDMA=0` | ★ 脚本 |
+| `hipMemGetInfo` 在 Vega 上失效 | ROCm 5.7 返回 `invalid argument` | shim 先试真函数，失败后从 totalGlobalMem 回退 | ★ 已修源码 |
 
-| 坑 | 现象 | 解决方案 |
-|----|------|----------|
-| 杀毒误杀编译产物 | DLL 被当木马删除，运行报 DLL not found | 恢复文件后全量重建（第二次编译的起因） |
-| `.def` forwarder 被 link.exe 静默忽略 | `STATUS_ENTRYPOINT_NOT_FOUND`，hipGetDeviceProperties 找不到 | 改用 `#pragma comment(linker, "/export:xxx=amdhip64.xxx")` 显式转发（MSVC 14.51 不再支持 .def 转发语法） |
-| Shim 结构体翻译导致架构 ID 错乱 | `invalid architecture ID received for device 0: cc 1024.1024` | `hipGetDeviceProperties` 直接转发到 ROCm 5.7，不再翻译结构体（ggml-hip.dll 按 5.7 头编译） |
-| `hipMemGetInfo` 在 Vega 上失效 | ROCm 5.7 对 Vega 返回 `invalid argument` | Shim 先试真函数，失败后从 `hipGetDeviceProperties` 的 totalGlobalMem 回退 |
-| SHARED 库缺 clang builtins | `lld-link: undefined symbol: __truncsfhf2` | `CMAKE_SHARED_LINKER_FLAGS` 手动指向 `clang_rt.builtins-x86_64.lib`（EXE 有 CMake 自动检测，SHARED 没有） |
-| ninja 锁文件残留 | `ninja: error: WriteFile(.ninja_lock): Permission denied` | 删除 `build-*/\.ninja_lock` 后重试 |
-| 手工改 CMakeCache 不生效 | 链接标志改了但没起作用 | 改完必须重新跑 `cmake -S . -B build -G Ninja` |
-| **rocBLAS 在 gfx900 上 GEMM 全挂** | `CUBLAS_STATUS_INTERNAL_ERROR`：Sgemm / GemmEx(F16→F32) / GemmEx(F16→F16) 全部失败 | 换 dispatcher、TheRock 21MB 库（ABI 不兼容）、完整 145MB 库（缺依赖）均无效 → **在 ggml-cuda.cu 中写自定义 GEMM 内核绕开 rocBLAS** |
-| MMF 内核不能当通用 GEMM 用 | 强制 `ggml_cuda_mul_mat_f` 后 `mmf.cuh:746: GGML_ASSERT(ids \|\| ncols_dst <= 16)` | MMF 只支持 `ncols ≤ 16`，编码器 384 列直接断言；必须自研内核 |
-| PowerShell PATH 带空格被解析 | `d:\Program: The term ... not recognized` | 命令执行环境 PATH 含空格路径，须用完整路径调用 cmake / ninja |
-
-### 第三次编译新增坑（2026-08-06，Shim 结构体翻译专项修复）
-
-> 本次修复最终让 SenseVoice 实时率从 23.6x **提升到 32.4x**，并彻底解决 rocBLAS `Could not initialize Tensile host` 崩溃。
-
-| 坑 | 现象 | 解决方案 |
-|----|------|----------|
-| **Shim 转发方向搞反（第二次记录需修正）** | 第二次把 `hipGetDeviceProperties`/`hipGetDevicePropertiesR0600` 直接转发到 5.7，导致诊断横幅出现 `cc 1.0`、`Wave Size 1590000`、`VRAM 4194304 MiB` 垃圾值 | 实测确认 `ggml-hip.dll` 是用 **TheRock 7.x 头**编译的，调用 `hipGetDevicePropertiesR0600` 后按 **7.x 布局（1472 字节）** 解读返回值。直接转发返回的是 5.7 布局（~800 字节），字段错位。**必须导出翻译实现**（5.7→7.x 布局英文翻译），不能转发 |
-| Shim 翻译实现未导出 | 源码里 `hipGetDevicePropertiesR0600_impl` 是 `static`，编译后没进导出表，ggml-hip 拿不到翻译 | 去掉 `static`、加 `__declspec(dllexport)`，并把 `hipGetDeviceProperties` 用 `#pragma comment(linker,"/export:hipGetDeviceProperties=hipGetDevicePropertiesR0600")` 别名到翻译实现 |
-| rocBLAS `Could not initialize Tensile host` 崩溃 | `Unknown exception thrown`，退出码 `0xC0000409`（fail-fast） | 根因是设备属性错乱（cc=1.0）导致不走 Vega 自定义 GEMM 路径而进入 rocBLAS。修正 shim 翻译后 cc=9.0、wave=64，自动走 `vega_*` 自定义 GEMM，崩溃消失 |
-| 沙箱/权限无法写 G 盘 | `Copy-Item` 报 `path not in allowlist` | 沙箱仅允许写 C 盘用户目录；G 盘部署需在用户终端手动执行 `Copy-Item` |
+> **注意**：手动编译（不跑一键脚本）时，Shim DLL 千万不要传 `/DEF:hip_shim.def` —— MSVC 14.51 link.exe 会静默忽略 `.def` 转发语法，导出全靠 `hip_shim.c` 里的 `#pragma comment(linker,"/export:...")` + `__declspec(dllexport)`。
 
 ---
 
@@ -280,6 +276,9 @@ Kokoro 模型在 CrispASR 中有内置的 "Metal-hang workaround"，强制 `gen=
 ---
 
 ## 折腾历程 / The Journey
+
+<details>
+<summary><b>作者踩坑全过程（不感兴趣可直接跳过，不影响使用）</b> — 点击展开</summary>
 
 > 以下是不被官方支持的 AMD Vega 显卡上跑通 ROCm 的完整记录。
 > A complete log of getting ROCm working on officially unsupported AMD Vega GPUs.
@@ -450,12 +449,14 @@ whisper_print_timings:    total time =  2681.93 ms
 ggml_cuda_init: found 1 ROCm devices (Total VRAM: 8176 MiB):
   Device 0: Radeon RX Vega, gfx900:xnack- (0x900), VMM: no, Wave Size: 64, VRAM: 8176 MiB
 
-ASR: SenseVoice Small  23.6-27.7x realtime (GPU)
+ASR: SenseVoice Small  23.6-32.4x realtime (GPU)
 ASR: Qwen3-ASR 0.6B    4.1x realtime (GPU)
 ASR: Qwen3-ASR 1.7B    3.0x realtime (GPU)
 TTS: Kokoro 82M        ~1.7x RTF (CPU)
 TTS: Qwen3-TTS 0.6B    1.45x RTF (GPU+CPU)
 ```
+
+</details>
 
 ---
 
@@ -467,8 +468,8 @@ crispasr-vega-rocm/
 ├── LICENSE                    # MIT 许可证 (Shim DLL 代码) / MIT License
 ├── .gitignore
 ├── hip-shim/                  # ABI 桥接 Shim DLL 源码 / ABI bridge source
-│   ├── hip_shim.c             # ROCm 7.x → 5.7 结构体翻译 / Struct translation
-│   └── hip_shim.def           # 60+ 符号转发定义 / 60+ symbol forwards
+│   ├── hip_shim.c             # 转发声明 + ROCm 5.7→7.x 结构体翻译 / Forwards + struct translation
+│   └── hip_shim.def           # 符号清单（仅参考；编译不用 .def，见踩坑清单）/ Reference only
 ├── scripts/                   # 构建和运行脚本 / Build and run scripts
 │   ├── build-all.ps1          # 一键编译 (已验证) / One-click build (verified)
 │   ├── build-hip-therock.ps1  # 仅编译 CrispASR (已验证) / Build only (verified)
