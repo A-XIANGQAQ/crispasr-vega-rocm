@@ -55,27 +55,33 @@
 
 > 测试日期：2026-07-28 | CrispASR v0.8.14 | Vega 56/64 (gfx900, 8GB VRAM) | ROCm 5.7 + TheRock HIP (clang 23.0.0)
 >
-> 2026-08-06 第三次修复后复测：SenseVoice EN 实时率进一步提升至 **32.4x**（见下方更新）
+> **2026-08-06 全量复测（Shim 翻译修复后）**：全部 ASR/TTS 模型重新实测，SenseVoice 达 33-47x，Qwen3-ASR 系列均有提升。实时率为稳态值（首次运行含冷启动开销，会偏慢）。
 
 ### ASR 语音识别 (GPU 加速)
 
 | 模型 | 量化 | 大小 | 语言 | 音频时长 | 处理时间 | 实时率 | 状态 |
 |------|------|------|------|---------|---------|--------|------|
-| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.34s | **32.4x** 🔥 | GPU 已验证 (2026-08-06) |
-| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.47s | **23.6x** | GPU 已验证 (基线) |
-| SenseVoice Small | Q4_K | 129MB | ZH | 13.1s | 0.47s | **27.7x** | GPU 已验证 |
-| Qwen3-ASR 0.6B | Q4_K | 602MB | EN | 11.0s | 2.66s | 4.1x | GPU 已验证 |
-| Qwen3-ASR 0.6B | Q4_K | 602MB | ZH | 13.1s | 3.19s | 4.1x | GPU 已验证 |
-| Qwen3-ASR 1.7B | Q4_K | 1422MB | EN | 11.0s | 3.62s | 3.0x | GPU 已验证 |
-| Qwen3-ASR 1.7B | Q4_K | 1422MB | ZH | 13.1s | 4.28s | 3.0x | GPU 已验证 |
+| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.33s | **33.2x** 🔥 | GPU 已验证 (2026-08-06 复测) |
+| SenseVoice Small | Q4_K | 129MB | ZH | 14.3s | 0.31s | **47.0x** 🔥 | GPU 已验证 (2026-08-06 复测) |
+| Qwen3-ASR 0.6B | Q4_K | 602MB | EN | 11.0s | 2.13s | **5.2x** | GPU 已验证 (2026-08-06 复测) |
+| Qwen3-ASR 0.6B | Q4_K | 602MB | ZH | 14.3s | 2.23s | **6.4x** | GPU 已验证 (2026-08-06 复测) |
+| Qwen3-ASR 1.7B | Q4_K | 1422MB | EN | 11.0s | 3.53s | **3.1x** | GPU 已验证 (2026-08-06 复测) |
+| Qwen3-ASR 1.7B | Q4_K | 1422MB | ZH | 14.3s | 3.35s | **4.3x** | GPU 已验证 (2026-08-06 复测) |
+| SenseVoice Small | Q4_K | 129MB | EN | 11.0s | 0.47s | 23.6x | 基线 (2026-07-28) |
+| SenseVoice Small | Q4_K | 129MB | ZH | 13.1s | 0.47s | 27.7x | 基线 (2026-07-28) |
+| Qwen3-ASR 0.6B | Q4_K | 602MB | EN | 11.0s | 2.66s | 4.1x | 基线 (2026-07-28) |
+| Qwen3-ASR 0.6B | Q4_K | 602MB | ZH | 13.1s | 3.19s | 4.1x | 基线 (2026-07-28) |
+| Qwen3-ASR 1.7B | Q4_K | 1422MB | EN | 11.0s | 3.62s | 3.0x | 基线 (2026-07-28) |
+| Qwen3-ASR 1.7B | Q4_K | 1422MB | ZH | 13.1s | 4.28s | 3.0x | 基线 (2026-07-28) |
 
 ### TTS 语音合成
 
 | 模型 | 量化 | 大小 | 运行模式 | 输出时长 | 总耗时 | RTF | 状态 |
 |------|------|------|---------|---------|--------|-----|------|
-| Kokoro 82M | Q8_0 | 135MB | CPU (Metal-hang workaround) | 3.65s | 6.3s | ~1.7x | 已验证 |
-| Qwen3-TTS 0.6B | Q8_0 | 940MB | GPU+CPU 混合 | 4.32s | 13.4s | 1.45x | 已验证 |
-| Chatterbox | Q8_0 | 958MB | 全 CPU (-ng) | 3.76s | 14.9s | ~0.25x | 仅 CPU 可用 |
+| Kokoro 82M | Q8_0 | 135MB | CPU (Metal-hang workaround) | 4.35s | — | ~1.7x | 已验证 (2026-08-06 复测) |
+| Qwen3-TTS 0.6B | Q8_0 | 940MB | GPU+CPU 混合 | 4.56s | 5.07s | **1.11x** | GPU 已验证 (2026-08-06 复测) |
+| Qwen3-TTS 0.6B | Q8_0 | 940MB | GPU+CPU 混合 | 14.2s | 67.3s | 4.73x | 长文本 (2026-08-06 复测, codec chunk 开销) |
+| Chatterbox | Q8_0 | 958MB | 全 CPU (-ng) | 3.68s | — | ~0.25x | 仅 CPU 可用 (2026-08-06 复测) |
 | F5-TTS | F16 | 953MB | GPU | — | — | — | 不可用 (FlashAttention 崩溃) |
 | F5-TTS | F16 | 953MB | CPU | — | >120s | — | 不可用 (CPU 推理超时) |
 
@@ -449,11 +455,11 @@ whisper_print_timings:    total time =  2681.93 ms
 ggml_cuda_init: found 1 ROCm devices (Total VRAM: 8176 MiB):
   Device 0: Radeon RX Vega, gfx900:xnack- (0x900), VMM: no, Wave Size: 64, VRAM: 8176 MiB
 
-ASR: SenseVoice Small  23.6-32.4x realtime (GPU)
-ASR: Qwen3-ASR 0.6B    4.1x realtime (GPU)
-ASR: Qwen3-ASR 1.7B    3.0x realtime (GPU)
+ASR: SenseVoice Small  33-47x realtime (GPU)
+ASR: Qwen3-ASR 0.6B    5.2-6.4x realtime (GPU)
+ASR: Qwen3-ASR 1.7B    3.1-4.3x realtime (GPU)
 TTS: Kokoro 82M        ~1.7x RTF (CPU)
-TTS: Qwen3-TTS 0.6B    1.45x RTF (GPU+CPU)
+TTS: Qwen3-TTS 0.6B    1.11x RTF (GPU+CPU)
 ```
 
 </details>
